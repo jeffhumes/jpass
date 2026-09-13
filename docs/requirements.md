@@ -25,6 +25,8 @@ Existing requirements without a marker are treated as planned until explicitly r
 - Store more than username/password pairs, including SSH keys, API tokens, recovery codes, certificates, and other sensitive fields.
 - Allow optional, user-controlled vault synchronization across supported platforms.
 - [~] Support local vault export and backup. Encrypted desktop backups are implemented; native file destinations and additional export formats remain pending.
+- Support restoring from a backup with validation before applying changes.
+- Allow users to cherry-pick individual entries, folders, or selected backup content to restore instead of requiring a full-vault restore.
 - Let users choose encrypted/password-protected or plain-text export output.
 - Support formats such as XML, JSON, CSV, TSV, and raw data.
 - Support credential export and import across supported platforms and formats.
@@ -75,6 +77,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 ## User Experience
 
 - [x] Prompt users for explicit confirmation before deleting a vault entry by default.
+- [x] Require the delete confirmation dialog to offer a validated encrypted vault backup before deletion, while allowing an explicit delete-without-backup choice.
 - [x] Provide a settings option to enable or disable the delete-confirmation prompt.
 - Keep delete behavior consistent across supported platforms.
 - [x] Let users choose whether entry-list actions display descriptive text buttons or compact icons, with the preference available in the Settings dialog.
@@ -86,6 +89,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 - [x] Keep Clipboard control honors the selected display theme with matching wrapper, label, select, focus, border, and surface styling.
 - [x] Remove the Keep Clipboard timeout dropdown from the main screen and place it in the Settings dialog.
 - [x] Copy username/password toast notifications show a working countdown and automatically clear the clipboard when the timer expires.
+- [x] Allow users to choose the toast-notification position in Settings: any display corner, top-center, center, or bottom-center.
 - Deferred Linux issue: investigate why the GTK/WebKit desktop build may render but not accept clicks in the master-password field or buttons. Current startup workarounds disable WebKit DMA-BUF/compositing, use software GL, and disable Dioxus debug always-on-top; a native Linux renderer or deeper GTK/WebKit investigation may be needed.
 
 ## Phase 2 Security Monitoring

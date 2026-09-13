@@ -4,7 +4,7 @@ use crate::password_gen::{generate_password, PasswordOptions};
 use crate::{clipboard, storage};
 use dioxus::prelude::*;
 use futures_util::StreamExt;
-use jpass_core::{AppSettings, AppTheme, EntryActionDisplay, PrimaryActionDisplay};
+use jpass_core::{AppSettings, AppTheme, EntryActionDisplay, PrimaryActionDisplay, ToastPosition};
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -316,6 +316,26 @@ fn VaultScreen(
         Ok(path.display().to_string())
     };
 
+    let create_validated_backup = move || -> Result<String, String> {
+        let Some(pw) = master_password() else {
+            return Err("Vault is locked.".into());
+        };
+        let Some(current_vault) = vault() else {
+            return Err("Vault is unavailable.".into());
+        };
+        let json = current_vault.to_json().map_err(|e| e.to_string())?;
+        let blob = crypto::encrypt(&json, &pw).map_err(|_| "encryption failed".to_string())?;
+        let restored = crypto::decrypt(&blob, &pw)
+            .map_err(|_| "backup validation failed: encrypted data could not be decrypted".to_string())?;
+        let restored_vault = Vault::from_json(&restored)
+            .map_err(|_| "backup validation failed: vault data could not be parsed".to_string())?;
+        if restored_vault.to_json().map_err(|e| e.to_string())? != json {
+            return Err("backup validation failed: restored data does not match the vault".into());
+        }
+        let path = storage::save_encrypted_backup(&blob).map_err(|e| e.to_string())?;
+        Ok(path.display().to_string())
+    };
+
     let lock = move |_| {
         vault.set(None);
         master_password.set(None);
@@ -415,7 +435,17 @@ fn VaultScreen(
             }
 
             if let Some(toast) = notification_snapshot {
-                div { class: "toast",
+                div { class: match settings().toast_position {
+                    ToastPosition::TopLeft => "toast toast-top-left",
+                    ToastPosition::TopCenter => "toast toast-top-center",
+                    ToastPosition::TopRight => "toast toast-top-right",
+                    ToastPosition::CenterLeft => "toast toast-center-left",
+                    ToastPosition::Center => "toast toast-center",
+                    ToastPosition::CenterRight => "toast toast-center-right",
+                    ToastPosition::BottomLeft => "toast toast-bottom-left",
+                    ToastPosition::BottomCenter => "toast toast-bottom-center",
+                    ToastPosition::BottomRight => "toast toast-bottom-right",
+                },
                     div { class: "toast-content",
                         span { "{toast.label}" }
                         div { class: "toast-timer-bar",
@@ -660,7 +690,7 @@ fn VaultScreen(
                                 "Cancel"
                             }
                             button {
-                                class: "danger",
+                                class: "secondary-btn",
                                 onclick: {
                                     let id = entry.id;
                                     move |_| {
@@ -668,7 +698,26 @@ fn VaultScreen(
                                         pending_delete.set(None);
                                     }
                                 },
-                                "Delete entry"
+                                "Delete without backup"
+                            }
+                            button {
+                                class: "primary",
+                                onclick: {
+                                    let id = entry.id;
+                                    move |_| match create_validated_backup() {
+                                        Ok(path) => {
+                                            delete_entry(id);
+                                            pending_delete.set(None);
+                                            copy_timer.send(ToastCommand::Show(ToastState {
+                                                label: format!("Backup validated, then entry deleted: {path}"),
+                                                duration_ms: 5000,
+                                                remaining_ms: 5000,
+                                            }));
+                                        }
+                                        Err(error) => save_error.set(Some(format!("Backup failed; entry was not deleted: {error}"))),
+                                    }
+                                },
+                                "Backup & Delete"
                             }
                         }
                     }
@@ -813,6 +862,47 @@ fn SettingsDialog(
                         option { value: "10", "10 seconds" }
                         option { value: "20", "20 seconds" }
                         option { value: "60", "60 seconds" }
+                    }
+                }
+                div { class: "settings-section",
+                    label { "Toast position" }
+                    p { class: "settings-help", "Choose where copy and backup notifications appear." }
+                    select {
+                        value: match settings().toast_position {
+                            ToastPosition::TopLeft => "top-left",
+                            ToastPosition::TopCenter => "top-center",
+                            ToastPosition::TopRight => "top-right",
+                            ToastPosition::CenterLeft => "center-left",
+                            ToastPosition::Center => "center",
+                            ToastPosition::CenterRight => "center-right",
+                            ToastPosition::BottomLeft => "bottom-left",
+                            ToastPosition::BottomCenter => "bottom-center",
+                            ToastPosition::BottomRight => "bottom-right",
+                        },
+                        onchange: move |event| {
+                            let mut updated = settings();
+                            updated.toast_position = match event.value().as_str() {
+                                "top-left" => ToastPosition::TopLeft,
+                                "top-center" => ToastPosition::TopCenter,
+                                "top-right" => ToastPosition::TopRight,
+                                "center-left" => ToastPosition::CenterLeft,
+                                "center" => ToastPosition::Center,
+                                "center-right" => ToastPosition::CenterRight,
+                                "bottom-left" => ToastPosition::BottomLeft,
+                                "bottom-center" => ToastPosition::BottomCenter,
+                                _ => ToastPosition::BottomRight,
+                            };
+                            save(updated);
+                        },
+                        option { value: "top-left", "Top left" }
+                        option { value: "top-center", "Top center" }
+                        option { value: "top-right", "Top right" }
+                        option { value: "center-left", "Center left" }
+                        option { value: "center", "Center" }
+                        option { value: "center-right", "Center right" }
+                        option { value: "bottom-left", "Bottom left" }
+                        option { value: "bottom-center", "Bottom center" }
+                        option { value: "bottom-right", "Bottom right" }
                     }
                 }
                 div { class: "modal-actions",

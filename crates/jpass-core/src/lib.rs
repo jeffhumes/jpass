@@ -39,6 +39,25 @@ impl Default for PrimaryActionDisplay {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToastPosition {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    CenterLeft,
+    Center,
+    CenterRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+}
+
+impl Default for ToastPosition {
+    fn default() -> Self {
+        Self::BottomRight
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub clipboard_timeout_secs: u64,
@@ -50,6 +69,8 @@ pub struct AppSettings {
     pub entry_action_display: EntryActionDisplay,
     #[serde(default)]
     pub primary_action_display: PrimaryActionDisplay,
+    #[serde(default)]
+    pub toast_position: ToastPosition,
 }
 
 fn default_confirm_delete() -> bool {
@@ -64,6 +85,7 @@ impl Default for AppSettings {
             confirm_delete: true,
             entry_action_display: EntryActionDisplay::default(),
             primary_action_display: PrimaryActionDisplay::default(),
+            toast_position: ToastPosition::default(),
         }
     }
 }

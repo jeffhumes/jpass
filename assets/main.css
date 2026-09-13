@@ -156,7 +156,7 @@ button.lock-btn {
   width: min(1680px, calc(100% - 3rem));
   margin: 0 auto;
   padding: 2rem 0 3rem;
-  animation: rise-in 0.35s ease-out both;
+  animation: fade-in 0.35s ease-out both;
 }
 
 .toolbar {
@@ -440,6 +440,47 @@ label {
   animation: toast-in 0.22s ease-out both;
 }
 
+.toast-top-left,
+.toast-top-center,
+.toast-top-right {
+  top: 1.5rem;
+  bottom: auto;
+}
+
+.toast-center-left,
+.toast-center,
+.toast-center-right {
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
+}
+
+.toast-bottom-left,
+.toast-center-left,
+.toast-top-left {
+  left: 1.5rem;
+  right: auto;
+}
+
+.toast-top-center,
+.toast-center,
+.toast-bottom-center {
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+}
+
+.toast-center {
+  transform: translate(-50%, -50%);
+}
+
+.toast-top-right,
+.toast-center-right,
+.toast-bottom-right {
+  left: auto;
+  right: 1.5rem;
+}
+
 .toast-content {
   display: flex;
   flex-direction: column;
@@ -646,6 +687,11 @@ label {
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @media (max-width: 760px) {

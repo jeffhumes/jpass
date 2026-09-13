@@ -29,7 +29,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 - Support formats such as XML, JSON, CSV, TSV, and raw data.
 - Support credential export and import across supported platforms and formats.
 - Validate imported data and provide safe conflict handling.
-- When adding an entry, let users select an existing folder or create a new folder for the entry before saving.
+- [x] When adding an entry, let users select an existing folder or create a new folder for the entry before saving.
 - Allow users to share selected vault entries via text, with explicit confirmation, sensitivity warnings, and secure handling.
 
 ## Authentication and Recovery
@@ -75,6 +75,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 - [x] Prompt users for explicit confirmation before deleting a vault entry by default.
 - [x] Provide a settings option to enable or disable the delete-confirmation prompt.
 - Keep delete behavior consistent across supported platforms.
+- Let users choose whether entry-list actions display descriptive text buttons or compact icons, with the preference available in the Settings dialog.
 
 ## Phase 2 Security Monitoring
 

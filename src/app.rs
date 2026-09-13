@@ -525,9 +525,19 @@ fn VaultScreen(
                 if let Some(entry) = editing() {
                     EntryEditor {
                         entry,
+                        folders: folders_for_select.clone(),
                         on_cancel: move |_| show_editor.set(false),
-                        on_save: move |updated: VaultEntry| {
+                        on_save: move |(mut updated, new_folder_name): (VaultEntry, Option<String>)| {
                             if let Some(mut v) = vault() {
+                                if let Some(name) = new_folder_name {
+                                    match v.create_folder(&name) {
+                                        Ok(folder) => updated.folder_id = Some(folder.id),
+                                        Err(error) => {
+                                            save_error.set(Some(error));
+                                            return;
+                                        }
+                                    }
+                                }
                                 if v.entries.iter().any(|e| e.id == updated.id) {
                                     v.update_entry(updated);
                                 } else {
@@ -742,7 +752,8 @@ fn SettingsDialog(
 #[component]
 fn EntryEditor(
     entry: VaultEntry,
-    on_save: EventHandler<VaultEntry>,
+    folders: Vec<VaultFolder>,
+    on_save: EventHandler<(VaultEntry, Option<String>)>,
     on_cancel: EventHandler<()>,
 ) -> Element {
     let mut title = use_signal(|| entry.title.clone());
@@ -751,6 +762,8 @@ fn EntryEditor(
     let mut url = use_signal(|| entry.url.clone());
     let mut notes = use_signal(|| entry.notes.clone());
     let mut reveal = use_signal(|| false);
+    let mut folder_id = use_signal(|| entry.folder_id.map(|id| id.to_string()).unwrap_or_default());
+    let mut new_folder_name = use_signal(String::new);
 
     let entry_id = entry.id;
     let created_at = entry.created_at;
@@ -780,23 +793,39 @@ fn EntryEditor(
                 input { value: "{url}", oninput: move |e| url.set(e.value()) }
                 label { "Notes" }
                 textarea { value: "{notes}", oninput: move |e| notes.set(e.value()) }
+                label { "Folder" }
+                select {
+                    value: "{folder_id}",
+                    onchange: move |e| folder_id.set(e.value()),
+                    option { value: "", "Unfiled" }
+                    for folder in folders {
+                        option { value: "{folder.id}", "{folder.name}" }
+                    }
+                }
+                input {
+                    placeholder: "Or create a new folder",
+                    value: "{new_folder_name}",
+                    oninput: move |e| new_folder_name.set(e.value()),
+                }
 
                 div { class: "modal-actions",
                     button { onclick: move |_| on_cancel.call(()), "Cancel" }
                     button {
                         class: "primary",
                         onclick: move |_| {
-                            on_save.call(VaultEntry {
+                            let selected_folder = Uuid::parse_str(&folder_id()).ok();
+                            let new_folder = new_folder_name().trim().to_string();
+                            on_save.call((VaultEntry {
                                 id: entry_id,
                                 title: title(),
                                 username: username(),
                                 password: password(),
                                 url: url(),
                                 notes: notes(),
-                                folder_id: entry.folder_id,
+                                folder_id: selected_folder,
                                 created_at,
                                 updated_at: chrono::Utc::now(),
-                            });
+                            }, if new_folder.is_empty() { None } else { Some(new_folder) }));
                         },
                         "Save"
                     }

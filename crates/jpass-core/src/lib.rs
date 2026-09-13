@@ -27,6 +27,18 @@ impl Default for EntryActionDisplay {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PrimaryActionDisplay {
+    Text,
+    Icons,
+}
+
+impl Default for PrimaryActionDisplay {
+    fn default() -> Self {
+        Self::Text
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub clipboard_timeout_secs: u64,
@@ -36,6 +48,8 @@ pub struct AppSettings {
     pub confirm_delete: bool,
     #[serde(default)]
     pub entry_action_display: EntryActionDisplay,
+    #[serde(default)]
+    pub primary_action_display: PrimaryActionDisplay,
 }
 
 fn default_confirm_delete() -> bool {
@@ -49,6 +63,7 @@ impl Default for AppSettings {
             theme: AppTheme::default(),
             confirm_delete: true,
             entry_action_display: EntryActionDisplay::default(),
+            primary_action_display: PrimaryActionDisplay::default(),
         }
     }
 }

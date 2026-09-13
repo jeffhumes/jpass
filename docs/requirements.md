@@ -76,6 +76,8 @@ Existing requirements without a marker are treated as planned until explicitly r
 - [x] Provide a settings option to enable or disable the delete-confirmation prompt.
 - Keep delete behavior consistent across supported platforms.
 - [x] Let users choose whether entry-list actions display descriptive text buttons or compact icons, with the preference available in the Settings dialog.
+- [x] Let users choose in Settings whether primary actions use descriptive text buttons or compact icons.
+- [x] Use a lock icon for the Lock primary action and a folder icon for the New Folder primary action.
 - [x] Remove the folder dropdown from entry rows and replace it with a dedicated Move button or icon.
 - [x] Allow the Move Entry dialog to create a new folder and move the selected entry into it.
 - UI bug to fix: the Keep Clipboard control does not currently honor the selected display theme and must be updated to use the active theme styling.

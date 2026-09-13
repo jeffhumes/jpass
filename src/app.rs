@@ -3,7 +3,7 @@ use crate::model::{Vault, VaultEntry, VaultFolder};
 use crate::password_gen::{generate_password, PasswordOptions};
 use crate::{clipboard, storage};
 use dioxus::prelude::*;
-use jpass_core::{AppSettings, AppTheme, EntryActionDisplay};
+use jpass_core::{AppSettings, AppTheme, EntryActionDisplay, PrimaryActionDisplay};
 use uuid::Uuid;
 
 const MAIN_CSS: &str = include_str!("../assets/main.css");
@@ -371,26 +371,36 @@ fn VaultScreen(
                     }
                 }
                 button {
+                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "icon-button primary-action" } else { "primary-action" },
+                    title: "Add entry",
+                    aria_label: "Add entry",
                     onclick: move |_| {
                         editing.set(Some(VaultEntry::new(String::new(), String::new(), String::new(), String::new(), String::new())));
                         show_editor.set(true);
                     },
-                    "+ Add Entry"
+                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "+" } else { "+ Add Entry" }
                 }
                 button {
+                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "icon-button primary-action" } else { "primary-action" },
+                    title: "New folder",
+                    aria_label: "New folder",
                     onclick: move |_| {
                         new_folder_name.set(String::new());
                         show_folder_modal.set(true);
                     },
-                    "+ New Folder"
+                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "📁+" } else { "+ New Folder" }
                 }
                 button {
-                    class: "secondary-btn",
+                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
+                    title: "Settings",
+                    aria_label: "Settings",
                     onclick: move |_| show_settings.set(true),
-                    "Settings"
+                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "⚙" } else { "Settings" }
                 }
                 button {
-                    class: "secondary-btn",
+                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
+                    title: "Create backup",
+                    aria_label: "Create backup",
                     onclick: move |_| match create_backup() {
                         Ok(path) => notification.set(Some(ToastState {
                             label: format!("Backup saved to {path}"),
@@ -399,9 +409,15 @@ fn VaultScreen(
                         })),
                         Err(error) => save_error.set(Some(format!("Backup failed: {error}"))),
                     },
-                    "Backup"
+                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "□↓" } else { "Backup" }
                 }
-                button { class: "lock-btn", onclick: lock, "Lock" }
+                button {
+                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "lock-btn icon-button primary-action" } else { "lock-btn primary-action" },
+                    title: "Lock vault",
+                    aria_label: "Lock vault",
+                    onclick: lock,
+                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "🔒" } else { "Lock" }
+                }
             }
 
             if let Some(msg) = save_error() {
@@ -763,6 +779,27 @@ fn SettingsDialog(
                                 EntryActionDisplay::Icons
                             } else {
                                 EntryActionDisplay::Text
+                            };
+                            save(updated);
+                        },
+                        option { value: "text", "Text buttons" }
+                        option { value: "icons", "Compact icons" }
+                    }
+                }
+                div { class: "settings-section",
+                    label { "Primary actions" }
+                    p { class: "settings-help", "Choose descriptive buttons or compact icons for the main toolbar actions." }
+                    select {
+                        value: match settings().primary_action_display {
+                            PrimaryActionDisplay::Text => "text",
+                            PrimaryActionDisplay::Icons => "icons",
+                        },
+                        onchange: move |event| {
+                            let mut updated = settings();
+                            updated.primary_action_display = if event.value() == "icons" {
+                                PrimaryActionDisplay::Icons
+                            } else {
+                                PrimaryActionDisplay::Text
                             };
                             save(updated);
                         },

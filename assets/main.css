@@ -594,6 +594,39 @@ label {
   line-height: 1.45;
 }
 
+.generator-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+  padding: 0.75rem 0;
+}
+
+.generator-options label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.generator-options input[type="checkbox"] {
+  width: 18px;
+  min-height: 18px;
+  accent-color: var(--accent);
+}
+
+.generated-password {
+  min-height: 48px;
+  padding: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--accent-strong);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 .settings-toggle {
   flex-direction: row;
   align-items: center;
@@ -670,6 +703,24 @@ label {
 
 .password-row button {
   white-space: nowrap;
+}
+
+.folder-select-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.folder-select-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.folder-create-button {
+  flex: 0 0 40px;
+  width: 40px;
+  min-width: 40px;
+  padding: 0.35rem;
 }
 
 .modal-actions {

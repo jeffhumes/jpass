@@ -54,9 +54,9 @@ Existing requirements without a marker are treated as planned until explicitly r
 
 ## Password Generator
 
-- Provide an easy-to-use standalone password generator without requiring a vault entry.
-- Allow users to adjust generated password length.
-- Allow users to choose character sets, including special characters, numbers, lowercase letters, and uppercase letters.
+- [~] Provide an easy-to-use standalone password generator without requiring a vault entry. Standalone generation, customization, and copy are implemented; generated-password history remains pending.
+- [x] Allow users to adjust generated password length.
+- [x] Allow users to choose character sets, including special characters, numbers, lowercase letters, and uppercase letters.
 - Support extensible generation options.
 - Provide a user-controlled history of generated passwords.
 - Store password history securely and allow users to clear it.
@@ -86,6 +86,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 - [x] Keep primary action icons consistent: Settings, Backup, and Lock use the same background and hover styling as the other primary icons.
 - [x] Remove the folder dropdown from entry rows and replace it with a dedicated Move button or icon.
 - [x] Allow the Move Entry dialog to create a new folder and move the selected entry into it.
+- [x] Replace the separate “Or create a new folder” fields in Move Entry and Edit Entry with a Create Folder icon beside the folder dropdown.
 - [x] Keep Clipboard control honors the selected display theme with matching wrapper, label, select, focus, border, and surface styling.
 - [x] Remove the Keep Clipboard timeout dropdown from the main screen and place it in the Settings dialog.
 - [x] Copy username/password toast notifications show a working countdown and automatically clear the clipboard when the timer expires.

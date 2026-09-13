@@ -214,6 +214,7 @@ fn VaultScreen(
     let mut show_editor = use_signal(|| false);
     let mut show_folder_modal = use_signal(|| false);
     let mut show_settings = use_signal(|| false);
+    let mut show_generator = use_signal(|| false);
     let mut pending_delete = use_signal::<Option<VaultEntry>>(|| None);
     let mut pending_move = use_signal::<Option<VaultEntry>>(|| None);
     let mut new_folder_name = use_signal(String::new);
@@ -221,38 +222,40 @@ fn VaultScreen(
     let mut notification = use_signal::<Option<ToastState>>(|| None);
     let settings = use_signal(|| storage::load_settings().unwrap_or_default());
 
-    let copy_timer = use_coroutine(move |mut commands: UnboundedReceiver<ToastCommand>| async move {
-        while let Some(command) = commands.next().await {
-            match command {
-                ToastCommand::Cancel => notification.set(None),
-                ToastCommand::Show(current) => {
-                    let total_ms = current.duration_ms.max(1);
-                    let started = Instant::now();
-                    notification.set(Some(ToastState {
-                        label: current.label.clone(),
-                        duration_ms: total_ms,
-                        remaining_ms: total_ms,
-                    }));
-
-                    loop {
-                        futures_timer::Delay::new(std::time::Duration::from_millis(50)).await;
-                        let elapsed_ms = started.elapsed().as_millis() as u64;
-                        let remaining = total_ms.saturating_sub(elapsed_ms);
-                        if remaining == 0 {
-                            notification.set(None);
-                            clipboard::clear_clipboard();
-                            break;
-                        }
+    let copy_timer = use_coroutine(
+        move |mut commands: UnboundedReceiver<ToastCommand>| async move {
+            while let Some(command) = commands.next().await {
+                match command {
+                    ToastCommand::Cancel => notification.set(None),
+                    ToastCommand::Show(current) => {
+                        let total_ms = current.duration_ms.max(1);
+                        let started = Instant::now();
                         notification.set(Some(ToastState {
                             label: current.label.clone(),
                             duration_ms: total_ms,
-                            remaining_ms: remaining,
+                            remaining_ms: total_ms,
                         }));
+
+                        loop {
+                            futures_timer::Delay::new(std::time::Duration::from_millis(50)).await;
+                            let elapsed_ms = started.elapsed().as_millis() as u64;
+                            let remaining = total_ms.saturating_sub(elapsed_ms);
+                            if remaining == 0 {
+                                notification.set(None);
+                                clipboard::clear_clipboard();
+                                break;
+                            }
+                            notification.set(Some(ToastState {
+                                label: current.label.clone(),
+                                duration_ms: total_ms,
+                                remaining_ms: remaining,
+                            }));
+                        }
                     }
                 }
             }
-        }
-    });
+        },
+    );
 
     let persist = move |v: &Vault| -> Result<(), String> {
         let Some(pw) = master_password() else {
@@ -325,8 +328,9 @@ fn VaultScreen(
         };
         let json = current_vault.to_json().map_err(|e| e.to_string())?;
         let blob = crypto::encrypt(&json, &pw).map_err(|_| "encryption failed".to_string())?;
-        let restored = crypto::decrypt(&blob, &pw)
-            .map_err(|_| "backup validation failed: encrypted data could not be decrypted".to_string())?;
+        let restored = crypto::decrypt(&blob, &pw).map_err(|_| {
+            "backup validation failed: encrypted data could not be decrypted".to_string()
+        })?;
         let restored_vault = Vault::from_json(&restored)
             .map_err(|_| "backup validation failed: vault data could not be parsed".to_string())?;
         if restored_vault.to_json().map_err(|e| e.to_string())? != json {
@@ -409,6 +413,13 @@ fn VaultScreen(
                 }
                 button {
                     class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
+                    title: "Password generator",
+                    aria_label: "Password generator",
+                    onclick: move |_| show_generator.set(true),
+                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "✦" } else { "Generator" }
+                }
+                button {
+                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
                     title: "Create backup",
                     aria_label: "Create backup",
                     onclick: move |_| match create_backup() {
@@ -419,7 +430,7 @@ fn VaultScreen(
                         })),
                         Err(error) => save_error.set(Some(format!("Backup failed: {error}"))),
                     },
-                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "□↓" } else { "Backup" }
+                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "📤" } else { "Backup" }
                 }
                 button {
                     class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "lock-btn icon-button primary-action" } else { "lock-btn primary-action" },
@@ -677,6 +688,21 @@ fn VaultScreen(
                 }
             }
 
+            if show_generator() {
+                PasswordGeneratorDialog {
+                    on_close: move |_| show_generator.set(false),
+                    on_copy: move |password: String| {
+                        let timeout = settings().clipboard_timeout_secs.max(1);
+                        clipboard::copy_to_clipboard(&password);
+                        copy_timer.send(ToastCommand::Show(ToastState {
+                            label: "Generated password copied".into(),
+                            duration_ms: timeout.saturating_mul(1000),
+                            remaining_ms: timeout.saturating_mul(1000),
+                        }));
+                    },
+                }
+            }
+
             if let Some(entry) = pending_delete() {
                 div { class: "modal-backdrop",
                     div { class: "modal confirmation-modal",
@@ -914,6 +940,61 @@ fn SettingsDialog(
 }
 
 #[component]
+fn PasswordGeneratorDialog(on_close: EventHandler<()>, on_copy: EventHandler<String>) -> Element {
+    let mut length = use_signal(|| PasswordOptions::default().length.to_string());
+    let mut lowercase = use_signal(|| true);
+    let mut uppercase = use_signal(|| true);
+    let mut digits = use_signal(|| true);
+    let mut symbols = use_signal(|| true);
+    let mut generated = use_signal(|| generate_password(PasswordOptions::default()));
+
+    let mut generate = move || {
+        let length = length().parse::<usize>().unwrap_or(20).clamp(4, 128);
+        generated.set(generate_password(PasswordOptions {
+            length,
+            lowercase: lowercase(),
+            uppercase: uppercase(),
+            digits: digits(),
+            symbols: symbols(),
+        }));
+    };
+
+    rsx! {
+        div { class: "modal-backdrop",
+            div { class: "modal generator-modal",
+                div { class: "settings-heading",
+                    div {
+                        span { class: "eyebrow", "UTILITY" }
+                        h2 { "Password generator" }
+                    }
+                    button { class: "modal-close", onclick: move |_| on_close.call(()), "×" }
+                }
+                label { "Password length" }
+                input {
+                    r#type: "number",
+                    min: "4",
+                    max: "128",
+                    value: "{length}",
+                    oninput: move |event| length.set(event.value()),
+                }
+                div { class: "generator-options",
+                    label { input { r#type: "checkbox", checked: lowercase(), onchange: move |event| lowercase.set(event.value() == "true") } " Lowercase" }
+                    label { input { r#type: "checkbox", checked: uppercase(), onchange: move |event| uppercase.set(event.value() == "true") } " Uppercase" }
+                    label { input { r#type: "checkbox", checked: digits(), onchange: move |event| digits.set(event.value() == "true") } " Numbers" }
+                    label { input { r#type: "checkbox", checked: symbols(), onchange: move |event| symbols.set(event.value() == "true") } " Special characters" }
+                }
+                div { class: "generated-password", aria_label: "Generated password", "{generated}" }
+                div { class: "modal-actions",
+                    button { class: "secondary-btn", onclick: move |_| generate(), "Generate" }
+                    button { class: "primary", onclick: move |_| on_copy.call(generated()), "Copy" }
+                    button { class: "primary", onclick: move |_| on_close.call(()), "Done" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
 fn MoveEntryDialog(
     entry: VaultEntry,
     folders: Vec<VaultFolder>,
@@ -922,6 +1003,7 @@ fn MoveEntryDialog(
 ) -> Element {
     let mut folder_id = use_signal(|| entry.folder_id.map(|id| id.to_string()).unwrap_or_default());
     let mut new_folder_name = use_signal(String::new);
+    let mut show_new_folder = use_signal(|| false);
 
     rsx! {
         div { class: "modal-backdrop",
@@ -930,18 +1012,29 @@ fn MoveEntryDialog(
                 h2 { "Move entry" }
                 p { class: "settings-help", "Choose a destination for ", strong { "{entry.title}" }, "." }
                 label { "Folder" }
-                select {
-                    value: "{folder_id}",
-                    onchange: move |event| folder_id.set(event.value()),
-                    option { value: "", "Unfiled" }
-                    for folder in folders {
-                        option { value: "{folder.id}", "{folder.name}" }
+                div { class: "folder-select-row",
+                    select {
+                        value: "{folder_id}",
+                        onchange: move |event| folder_id.set(event.value()),
+                        option { value: "", "Unfiled" }
+                        for folder in folders {
+                            option { value: "{folder.id}", "{folder.name}" }
+                        }
+                    }
+                    button {
+                        class: "icon-button folder-create-button",
+                        title: "Create folder",
+                        aria_label: "Create folder",
+                        onclick: move |_| show_new_folder.set(!show_new_folder()),
+                        "📁+"
                     }
                 }
-                input {
-                    placeholder: "Or create a new folder",
-                    value: "{new_folder_name}",
-                    oninput: move |event| new_folder_name.set(event.value()),
+                if show_new_folder() {
+                    input {
+                        placeholder: "New folder name",
+                        value: "{new_folder_name}",
+                        oninput: move |event| new_folder_name.set(event.value()),
+                    }
                 }
                 div { class: "modal-actions",
                     button {
@@ -985,6 +1078,7 @@ fn EntryEditor(
     let mut reveal = use_signal(|| false);
     let mut folder_id = use_signal(|| entry.folder_id.map(|id| id.to_string()).unwrap_or_default());
     let mut new_folder_name = use_signal(String::new);
+    let mut show_new_folder = use_signal(|| false);
 
     let entry_id = entry.id;
     let created_at = entry.created_at;
@@ -1015,18 +1109,29 @@ fn EntryEditor(
                 label { "Notes" }
                 textarea { value: "{notes}", oninput: move |e| notes.set(e.value()) }
                 label { "Folder" }
-                select {
-                    value: "{folder_id}",
-                    onchange: move |e| folder_id.set(e.value()),
-                    option { value: "", "Unfiled" }
-                    for folder in folders {
-                        option { value: "{folder.id}", "{folder.name}" }
+                div { class: "folder-select-row",
+                    select {
+                        value: "{folder_id}",
+                        onchange: move |e| folder_id.set(e.value()),
+                        option { value: "", "Unfiled" }
+                        for folder in folders {
+                            option { value: "{folder.id}", "{folder.name}" }
+                        }
+                    }
+                    button {
+                        class: "icon-button folder-create-button",
+                        title: "Create folder",
+                        aria_label: "Create folder",
+                        onclick: move |_| show_new_folder.set(!show_new_folder()),
+                        "📁+"
                     }
                 }
-                input {
-                    placeholder: "Or create a new folder",
-                    value: "{new_folder_name}",
-                    oninput: move |e| new_folder_name.set(e.value()),
+                if show_new_folder() {
+                    input {
+                        placeholder: "New folder name",
+                        value: "{new_folder_name}",
+                        oninput: move |e| new_folder_name.set(e.value()),
+                    }
                 }
 
                 div { class: "modal-actions",

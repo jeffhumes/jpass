@@ -76,7 +76,9 @@ Existing requirements without a marker are treated as planned until explicitly r
 - [x] Provide a settings option to enable or disable the delete-confirmation prompt.
 - Keep delete behavior consistent across supported platforms.
 - [x] Let users choose whether entry-list actions display descriptive text buttons or compact icons, with the preference available in the Settings dialog.
-- Later UI refinement: remove the folder dropdown from entry rows and replace it with a dedicated Move button or icon.
+- [x] Remove the folder dropdown from entry rows and replace it with a dedicated Move button or icon.
+- UI bug to fix: the Keep Clipboard control does not currently honor the selected display theme and must be updated to use the active theme styling.
+- Deferred Linux issue: investigate why the GTK/WebKit desktop build may render but not accept clicks in the master-password field or buttons. Current startup workarounds disable WebKit DMA-BUF/compositing, use software GL, and disable Dioxus debug always-on-top; a native Linux renderer or deeper GTK/WebKit investigation may be needed.
 
 ## Phase 2 Security Monitoring
 

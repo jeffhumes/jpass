@@ -208,6 +208,7 @@ fn VaultScreen(
     let mut show_folder_modal = use_signal(|| false);
     let mut show_settings = use_signal(|| false);
     let mut pending_delete = use_signal::<Option<VaultEntry>>(|| None);
+    let mut pending_move = use_signal::<Option<VaultEntry>>(|| None);
     let mut new_folder_name = use_signal(String::new);
     let mut save_error = use_signal::<Option<String>>(|| None);
     let mut notification = use_signal::<Option<ToastState>>(|| None);
@@ -258,6 +259,20 @@ fn VaultScreen(
                     save_error.set(None);
                 }
                 Err(error) => save_error.set(Some(error)),
+            }
+        }
+    };
+
+    let mut move_entry = move |(entry_id, folder_id): (Uuid, Option<Uuid>)| {
+        if let Some(mut v) = vault() {
+            if v.move_entry_to_folder(entry_id, folder_id) {
+                match persist(&v) {
+                    Ok(()) => {
+                        vault.set(Some(v));
+                        save_error.set(None);
+                    }
+                    Err(error) => save_error.set(Some(error)),
+                }
             }
         }
     };
@@ -425,40 +440,15 @@ fn VaultScreen(
                                     span { class: "entry-username", "{entry.username}" }
                                 }
                                 div { class: "entry-actions",
-                                    select {
-                                        value: match entry.folder_id { Some(id) => id.to_string(), None => String::new() },
-                                        onchange: {
-                                            let entry_id = entry.id;
-                                            move |e| {
-                                                let folder_value = e.value();
-                                                let target = if folder_value.trim().is_empty() {
-                                                    None
-                                                } else {
-                                                    Uuid::parse_str(&folder_value).ok()
-                                                };
-
-                                                if let Some(mut v) = vault() {
-                                                    let changed = v.move_entry_to_folder(entry_id, target);
-                                                    if changed {
-                                                        match persist(&v) {
-                                                            Ok(()) => {
-                                                                vault.set(Some(v));
-                                                                save_error.set(None);
-                                                            }
-                                                            Err(err) => save_error.set(Some(err)),
-                                                        }
-                                                    }
-                                                }
-                                            }
+                                    button {
+                                        class: if settings().entry_action_display == EntryActionDisplay::Icons { "icon-button" } else { "" },
+                                        title: "Move entry",
+                                        aria_label: "Move entry",
+                                        onclick: {
+                                            let entry = entry.clone();
+                                            move |_| pending_move.set(Some(entry.clone()))
                                         },
-                                        option { value: "", "Unfiled" }
-                                        for folder in folders_for_select.clone() {
-                                            option {
-                                                value: "{folder.id}",
-                                                selected: entry.folder_id == Some(folder.id),
-                                                "{folder.name}"
-                                            }
-                                        }
+                                        if settings().entry_action_display == EntryActionDisplay::Icons { "⇄" } else { "Move" }
                                     }
                                     button {
                                         class: if settings().entry_action_display == EntryActionDisplay::Icons { "icon-button" } else { "" },
@@ -476,7 +466,7 @@ fn VaultScreen(
                                                 }));
                                             }
                                         },
-                                        if settings().entry_action_display == EntryActionDisplay::Icons { "↥" } else { "Copy user" }
+                                        if settings().entry_action_display == EntryActionDisplay::Icons { "👤" } else { "Copy user" }
                                     }
                                     button {
                                         class: if settings().entry_action_display == EntryActionDisplay::Icons { "icon-button" } else { "" },
@@ -665,6 +655,18 @@ fn VaultScreen(
                     }
                 }
             }
+
+            if let Some(entry) = pending_move() {
+                MoveEntryDialog {
+                    entry,
+                    folders: folders_for_select.clone(),
+                    on_cancel: move |_| pending_move.set(None),
+                    on_move: move |selection: (Uuid, Option<Uuid>)| {
+                        move_entry(selection);
+                        pending_move.set(None);
+                    },
+                }
+            }
         }
     }
 }
@@ -775,6 +777,50 @@ fn SettingsDialog(
                 }
                 div { class: "modal-actions",
                     button { class: "primary", onclick: move |_| on_close.call(()), "Done" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn MoveEntryDialog(
+    entry: VaultEntry,
+    folders: Vec<VaultFolder>,
+    on_cancel: EventHandler<()>,
+    on_move: EventHandler<(Uuid, Option<Uuid>)>,
+) -> Element {
+    let mut folder_id = use_signal(|| entry.folder_id.map(|id| id.to_string()).unwrap_or_default());
+
+    rsx! {
+        div { class: "modal-backdrop",
+            div { class: "modal move-modal",
+                span { class: "eyebrow", "ORGANIZE ENTRY" }
+                h2 { "Move entry" }
+                p { class: "settings-help", "Choose a destination for ", strong { "{entry.title}" }, "." }
+                label { "Folder" }
+                select {
+                    value: "{folder_id}",
+                    onchange: move |event| folder_id.set(event.value()),
+                    option { value: "", "Unfiled" }
+                    for folder in folders {
+                        option { value: "{folder.id}", "{folder.name}" }
+                    }
+                }
+                div { class: "modal-actions",
+                    button {
+                        class: "secondary-btn",
+                        onclick: move |_| on_cancel.call(()),
+                        "Cancel"
+                    }
+                    button {
+                        class: "primary",
+                        onclick: {
+                            let entry_id = entry.id;
+                            move |_| on_move.call((entry_id, Uuid::parse_str(&folder_id()).ok()))
+                        },
+                        "Move entry"
+                    }
                 }
             }
         }

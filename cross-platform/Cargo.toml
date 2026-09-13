@@ -1,0 +1,9 @@
+[workspace]
+members = [
+  "crates/jpass-core",
+  "crates/jpass-platform",
+  "crates/jpass-desktop",
+  "crates/jpass-android",
+  "crates/jpass-ios",
+]
+resolver = "2"

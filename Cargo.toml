@@ -4,6 +4,16 @@ version = "0.1.0"
 edition = "2021"
 description = "A cross-platform password keeper built with Rust and Dioxus"
 
+[workspace]
+members = [
+  "crates/jpass-core",
+  "crates/jpass-platform",
+  "crates/jpass-desktop",
+  "crates/jpass-android",
+  "crates/jpass-ios",
+]
+resolver = "2"
+
 [dependencies]
 dioxus = { version = "0.7", default-features = false, features = ["macro", "html", "signals", "hooks", "launch", "document", "asset"] }
 serde = { version = "1", features = ["derive"] }
@@ -16,6 +26,11 @@ chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"
 thiserror = "1"
 futures-timer = "3"
+jpass-core = { path = "crates/jpass-core" }
+jpass-platform = { path = "crates/jpass-platform" }
+jpass-desktop = { path = "crates/jpass-desktop" }
+jpass-android = { path = "crates/jpass-android" }
+jpass-ios = { path = "crates/jpass-ios" }
 
 # Native-only (desktop) dependencies, pulled in by the "desktop" feature
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }

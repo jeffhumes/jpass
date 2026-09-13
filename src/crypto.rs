@@ -9,8 +9,8 @@ use aes_gcm::{Aes256Gcm, Key, Nonce};
 use argon2::Argon2;
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
+pub use jpass_core::EncryptedBlob;
 use rand::RngCore;
-use serde::{Deserialize, Serialize};
 
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
@@ -24,16 +24,6 @@ pub enum CryptoError {
     Encryption,
     #[error("incorrect master password or corrupted vault")]
     Decryption,
-}
-
-/// The persisted, encrypted form of the vault. All byte fields are base64
-/// encoded so this struct can be stored as-is in SQLite, JSON, or browser
-/// storage without any extra conversion layer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EncryptedBlob {
-    pub salt: String,
-    pub nonce: String,
-    pub ciphertext: String,
 }
 
 fn derive_key(password: &str, salt: &[u8]) -> Result<[u8; KEY_LEN], CryptoError> {

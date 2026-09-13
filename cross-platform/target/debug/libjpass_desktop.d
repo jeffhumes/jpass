@@ -1,0 +1,1 @@
+/home/jeffhumes/JPass/cross-platform/target/debug/libjpass_desktop.rlib: /home/jeffhumes/JPass/cross-platform/crates/jpass-core/src/lib.rs /home/jeffhumes/JPass/cross-platform/crates/jpass-desktop/src/lib.rs /home/jeffhumes/JPass/cross-platform/crates/jpass-platform/src/lib.rs

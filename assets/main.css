@@ -9,6 +9,10 @@
   --muted: #9aada8;
   --accent: #39c6aa;
   --accent-strong: #65e0c1;
+  --icon-bg: #315a86;
+  --icon-bg-hover: #3f72a6;
+  --action-hover: #267d76;
+  --action-hover-border: #43b7a5;
   --danger: #ed6e73;
   --shadow: 0 22px 60px rgba(0, 0, 0, 0.28);
 }
@@ -94,15 +98,18 @@ button {
   padding: 0.6rem 0.9rem;
   border: 1px solid transparent;
   border-radius: 8px;
-  background: var(--accent);
-  color: #09211d;
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
   font: 600 0.88rem "Segoe UI Variable", "Segoe UI", sans-serif;
   cursor: pointer;
   transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
 }
 
 button:hover {
-  background: var(--accent-strong);
+  background: var(--action-hover);
+  border-color: var(--action-hover-border);
+  color: #f4fffc;
   transform: translateY(-1px);
 }
 
@@ -116,7 +123,7 @@ button:focus-visible {
 }
 
 button.primary {
-  background: var(--accent);
+  background: transparent;
 }
 
 button.danger {
@@ -184,6 +191,24 @@ button.lock-btn {
   padding: 0.35rem 0.5rem;
   border: 0;
   background: transparent;
+  color: var(--text);
+  box-shadow: none;
+}
+
+.clipboard-setting select:focus {
+  border: 0;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.light-theme .clipboard-setting {
+  background: rgba(22, 67, 61, 0.06);
+  border-color: rgba(21, 57, 53, 0.16);
+  color: var(--muted);
+}
+
+.light-theme .clipboard-setting select {
+  background: transparent;
+  color: var(--text);
 }
 
 .vault-layout {
@@ -316,6 +341,74 @@ button.lock-btn {
   padding: 0.35rem;
   font-size: 1rem;
   line-height: 1;
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.entry-actions .icon-button:hover {
+  background: var(--action-hover);
+  border-color: var(--action-hover-border);
+  color: #f4fffc;
+}
+
+.primary-action.icon-button {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.primary-action.icon-button:hover {
+  background: var(--action-hover);
+  border-color: var(--action-hover-border);
+  color: #f4fffc;
+}
+
+/* Keep actions quiet until the user moves over them. */
+button,
+button.primary,
+button.secondary-btn,
+button.lock-btn,
+.entry-actions .icon-button,
+.primary-action.icon-button {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+button:hover,
+button.primary:hover,
+button.secondary-btn:hover,
+button.lock-btn:hover,
+.entry-actions .icon-button:hover,
+.primary-action.icon-button:hover {
+  background: var(--action-hover);
+  border-color: var(--action-hover-border);
+  color: #f4fffc;
+}
+
+button.danger {
+  color: #ff9b9d;
+}
+
+button.danger:hover {
+  background: var(--action-hover);
+  border-color: var(--action-hover-border);
+  color: #fff4f4;
+}
+
+button.danger,
+.entry-actions .icon-button.danger {
+  background: transparent;
+  border-color: rgba(237, 110, 115, 0.55);
+  color: #ff9b9d;
+}
+
+button.danger:hover,
+.entry-actions .icon-button.danger:hover {
+  background: var(--danger);
+  border-color: #ff9b9d;
+  color: #fff;
 }
 
 textarea {
@@ -503,6 +596,10 @@ label {
   --muted: #5e7772;
   --accent: #168d78;
   --accent-strong: #0d6d5d;
+  --icon-bg: #326a9c;
+  --icon-bg-hover: #3e7eb5;
+  --action-hover: #2c8f82;
+  --action-hover-border: #41ad9c;
   --shadow: 0 22px 60px rgba(34, 73, 68, 0.16);
   background: radial-gradient(circle at 80% -10%, #c4e3dc 0, transparent 34rem), var(--bg);
 }

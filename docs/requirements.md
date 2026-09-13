@@ -35,6 +35,8 @@ Existing requirements without a marker are treated as planned until explicitly r
 ## Authentication and Recovery
 
 - Provide a secure way for users to recover a forgotten master password. The recovery method remains to be designed.
+- Allow users to configure a PIN as an alternative unlock method for a user-defined period after master-password authentication, with the PIN validity duration adjustable in Settings.
+- Treat the PIN as a temporary, device-local unlock mechanism with secure storage, expiration, retry protections, and revocation when the master password or security settings change.
 - Phase 2: support passwordless login with passkeys and hardware security keys.
 - Phase 2 passwordless authentication must include secure enrollment, key management, recovery, revocation, and cross-platform compatibility.
 
@@ -78,9 +80,10 @@ Existing requirements without a marker are treated as planned until explicitly r
 - [x] Let users choose whether entry-list actions display descriptive text buttons or compact icons, with the preference available in the Settings dialog.
 - [x] Let users choose in Settings whether primary actions use descriptive text buttons or compact icons.
 - [x] Use a lock icon for the Lock primary action and a folder icon for the New Folder primary action.
+- [x] Keep primary action icons consistent: Settings, Backup, and Lock use the same background and hover styling as the other primary icons.
 - [x] Remove the folder dropdown from entry rows and replace it with a dedicated Move button or icon.
 - [x] Allow the Move Entry dialog to create a new folder and move the selected entry into it.
-- UI bug to fix: the Keep Clipboard control does not currently honor the selected display theme and must be updated to use the active theme styling.
+- [x] Keep Clipboard control honors the selected display theme with matching wrapper, label, select, focus, border, and surface styling.
 - Deferred Linux issue: investigate why the GTK/WebKit desktop build may render but not accept clicks in the master-password field or buttons. Current startup workarounds disable WebKit DMA-BUF/compositing, use software GL, and disable Dioxus debug always-on-top; a native Linux renderer or deeper GTK/WebKit investigation may be needed.
 
 ## Phase 2 Security Monitoring

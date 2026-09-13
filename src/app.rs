@@ -263,19 +263,32 @@ fn VaultScreen(
         }
     };
 
-    let mut move_entry = move |(entry_id, folder_id): (Uuid, Option<Uuid>)| {
-        if let Some(mut v) = vault() {
-            if v.move_entry_to_folder(entry_id, folder_id) {
-                match persist(&v) {
-                    Ok(()) => {
-                        vault.set(Some(v));
-                        save_error.set(None);
+    let mut move_entry =
+        move |(entry_id, folder_id, new_folder_name): (Uuid, Option<Uuid>, Option<String>)| {
+            if let Some(mut v) = vault() {
+                let target_folder = if let Some(name) = new_folder_name {
+                    match v.create_folder(&name) {
+                        Ok(folder) => Some(folder.id),
+                        Err(error) => {
+                            save_error.set(Some(error));
+                            return;
+                        }
                     }
-                    Err(error) => save_error.set(Some(error)),
+                } else {
+                    folder_id
+                };
+
+                if v.move_entry_to_folder(entry_id, target_folder) {
+                    match persist(&v) {
+                        Ok(()) => {
+                            vault.set(Some(v));
+                            save_error.set(None);
+                        }
+                        Err(error) => save_error.set(Some(error)),
+                    }
                 }
             }
-        }
-    };
+        };
 
     let create_backup = move || -> Result<String, String> {
         let Some(pw) = master_password() else {
@@ -661,7 +674,7 @@ fn VaultScreen(
                     entry,
                     folders: folders_for_select.clone(),
                     on_cancel: move |_| pending_move.set(None),
-                    on_move: move |selection: (Uuid, Option<Uuid>)| {
+                    on_move: move |selection: (Uuid, Option<Uuid>, Option<String>)| {
                         move_entry(selection);
                         pending_move.set(None);
                     },
@@ -788,9 +801,10 @@ fn MoveEntryDialog(
     entry: VaultEntry,
     folders: Vec<VaultFolder>,
     on_cancel: EventHandler<()>,
-    on_move: EventHandler<(Uuid, Option<Uuid>)>,
+    on_move: EventHandler<(Uuid, Option<Uuid>, Option<String>)>,
 ) -> Element {
     let mut folder_id = use_signal(|| entry.folder_id.map(|id| id.to_string()).unwrap_or_default());
+    let mut new_folder_name = use_signal(String::new);
 
     rsx! {
         div { class: "modal-backdrop",
@@ -807,6 +821,11 @@ fn MoveEntryDialog(
                         option { value: "{folder.id}", "{folder.name}" }
                     }
                 }
+                input {
+                    placeholder: "Or create a new folder",
+                    value: "{new_folder_name}",
+                    oninput: move |event| new_folder_name.set(event.value()),
+                }
                 div { class: "modal-actions",
                     button {
                         class: "secondary-btn",
@@ -817,7 +836,14 @@ fn MoveEntryDialog(
                         class: "primary",
                         onclick: {
                             let entry_id = entry.id;
-                            move |_| on_move.call((entry_id, Uuid::parse_str(&folder_id()).ok()))
+                            move |_| {
+                                let name = new_folder_name().trim().to_string();
+                                on_move.call((
+                                    entry_id,
+                                    Uuid::parse_str(&folder_id()).ok(),
+                                    if name.is_empty() { None } else { Some(name) },
+                                ));
+                            }
                         },
                         "Move entry"
                     }

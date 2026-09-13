@@ -3,6 +3,7 @@ use crate::model::{Vault, VaultEntry, VaultFolder};
 use crate::password_gen::{generate_password, PasswordOptions};
 use crate::{clipboard, storage};
 use dioxus::prelude::*;
+use jpass_core::{AppSettings, AppTheme};
 use uuid::Uuid;
 
 const MAIN_CSS: &str = include_str!("../assets/main.css");
@@ -205,14 +206,12 @@ fn VaultScreen(
     let mut editing = use_signal::<Option<VaultEntry>>(|| None);
     let mut show_editor = use_signal(|| false);
     let mut show_folder_modal = use_signal(|| false);
+    let mut show_settings = use_signal(|| false);
     let mut new_folder_name = use_signal(String::new);
     let mut save_error = use_signal::<Option<String>>(|| None);
     let mut notification = use_signal::<Option<ToastState>>(|| None);
-    let mut clipboard_timeout = use_signal(|| {
-        storage::load_settings()
-            .map(|settings| settings.clipboard_timeout_secs.max(1))
-            .unwrap_or_else(|_| storage::AppSettings::default_timeout().max(1))
-    });
+    let mut settings = use_signal(|| storage::load_settings().unwrap_or_default());
+    let clipboard_timeout = settings().clipboard_timeout_secs.max(1);
 
     let _copy_timer = use_future(move || {
         let active = notification();
@@ -285,7 +284,7 @@ fn VaultScreen(
     });
 
     rsx! {
-        div { class: "vault-screen",
+        div { class: if settings().theme == AppTheme::Light { "vault-screen light-theme" } else { "vault-screen" },
             div { class: "toolbar",
                 input {
                     class: "search",
@@ -300,12 +299,12 @@ fn VaultScreen(
                         onchange: move |e| {
                             if let Ok(value) = e.value().parse::<u64>() {
                                 let timeout = value.max(1);
-                                clipboard_timeout.set(timeout);
-                                if let Err(err) = storage::save_settings(&storage::AppSettings {
-                                    clipboard_timeout_secs: timeout,
-                                }) {
+                                let mut updated = settings();
+                                updated.clipboard_timeout_secs = timeout;
+                                if let Err(err) = storage::save_settings(&updated) {
                                     save_error.set(Some(format!("Failed to save clipboard setting: {err}")));
                                 } else {
+                                    settings.set(updated);
                                     save_error.set(None);
                                 }
                             }
@@ -329,6 +328,11 @@ fn VaultScreen(
                         show_folder_modal.set(true);
                     },
                     "+ New Folder"
+                }
+                button {
+                    class: "secondary-btn",
+                    onclick: move |_| show_settings.set(true),
+                    "Settings"
                 }
                 button { class: "lock-btn", onclick: lock, "Lock" }
             }
@@ -420,7 +424,7 @@ fn VaultScreen(
                                     button {
                                         onclick: {
                                             let username = entry.username.clone();
-                                            let timeout = clipboard_timeout();
+                                            let timeout = settings().clipboard_timeout_secs.max(1);
                                             move |_| {
                                                 clipboard::copy_to_clipboard(&username);
                                                 notification.set(Some(ToastState {
@@ -435,7 +439,7 @@ fn VaultScreen(
                                     button {
                                         onclick: {
                                             let password = entry.password.clone();
-                                            let timeout = clipboard_timeout();
+                                            let timeout = settings().clipboard_timeout_secs.max(1);
                                             move |_| {
                                                 clipboard::copy_to_clipboard(&password);
                                                 notification.set(Some(ToastState {
@@ -565,6 +569,90 @@ fn VaultScreen(
                             }
                         }
                     }
+                }
+            }
+
+            if show_settings() {
+                SettingsDialog {
+                    settings,
+                    on_close: move |_| show_settings.set(false),
+                    on_error: move |message: String| save_error.set(Some(message)),
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn SettingsDialog(
+    settings: Signal<AppSettings>,
+    on_close: EventHandler<()>,
+    on_error: EventHandler<String>,
+) -> Element {
+    let mut settings = settings;
+
+    let mut save = move |updated: AppSettings| match storage::save_settings(&updated) {
+        Ok(()) => settings.set(updated),
+        Err(error) => on_error.call(format!("Failed to save settings: {error}")),
+    };
+
+    rsx! {
+        div { class: "modal-backdrop",
+            div { class: "modal settings-modal",
+                div { class: "settings-heading",
+                    div {
+                        span { class: "eyebrow", "PREFERENCES" }
+                        h2 { "Settings" }
+                    }
+                    button {
+                        class: "modal-close",
+                        onclick: move |_| on_close.call(()),
+                        "×"
+                    }
+                }
+                div { class: "settings-section",
+                    label { "Appearance" }
+                    select {
+                        value: match settings().theme {
+                            AppTheme::Dark => "dark",
+                            AppTheme::Light => "light",
+                            AppTheme::System => "system",
+                        },
+                        onchange: move |event| {
+                            let theme = match event.value().as_str() {
+                                "light" => AppTheme::Light,
+                                "system" => AppTheme::System,
+                                _ => AppTheme::Dark,
+                            };
+                            let mut updated = settings();
+                            updated.theme = theme;
+                            save(updated);
+                        },
+                        option { value: "dark", "Dark" }
+                        option { value: "light", "Light" }
+                        option { value: "system", "Use system preference" }
+                    }
+                }
+                div { class: "settings-section",
+                    label { "Clipboard timeout" }
+                    p { class: "settings-help", "Copied credentials are cleared automatically after this time." }
+                    select {
+                        value: "{settings().clipboard_timeout_secs.max(1)}",
+                        onchange: move |event| {
+                            if let Ok(timeout) = event.value().parse::<u64>() {
+                                let mut updated = settings();
+                                updated.clipboard_timeout_secs = timeout.max(1);
+                                save(updated);
+                            }
+                        },
+                        option { value: "5", "5 seconds" }
+                        option { value: "10", "10 seconds" }
+                        option { value: "20", "20 seconds" }
+                        option { value: "60", "60 seconds" }
+                    }
+                }
+                div { class: "modal-actions",
+                    button { class: "primary", onclick: move |_| on_close.call(()), "Done" }
                 }
             }
         }

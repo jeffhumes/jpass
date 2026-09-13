@@ -80,6 +80,8 @@ cargo build --release
 
 The project is currently configured with a desktop-first default feature set. Web support exists through feature flags in the dependency configuration, but the default app experience is the native desktop app.
 
+Planned product and security requirements are tracked in [docs/requirements.md](docs/requirements.md).
+
 ## Contributing
 
 Contributions are welcome. If you want to improve the app, please open a pull request with a clear explanation of the change and verification steps.

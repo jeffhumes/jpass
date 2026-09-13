@@ -2,9 +2,33 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AppTheme {
+    Dark,
+    Light,
+    System,
+}
+
+impl Default for AppTheme {
+    fn default() -> Self {
+        Self::Dark
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub clipboard_timeout_secs: u64,
+    #[serde(default)]
+    pub theme: AppTheme,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            clipboard_timeout_secs: Self::default_timeout(),
+            theme: AppTheme::default(),
+        }
+    }
 }
 
 impl AppSettings {

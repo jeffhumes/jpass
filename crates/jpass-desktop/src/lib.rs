@@ -1,5 +1,6 @@
 use jpass_core::{AppSettings, EncryptedBlob};
 use jpass_platform::{ClipboardService, PlatformError, PlatformPaths, VaultStore};
+use std::fs;
 use std::path::PathBuf;
 
 pub struct DesktopStore;
@@ -59,50 +60,35 @@ impl VaultStore for DesktopStore {
     }
 
     fn load_settings(&self) -> Result<AppSettings, Self::Error> {
-        let path = self
-            .data_dir()
-            .map_err(|e| PlatformError::Path(e.to_string()))?
-            .join("vault.sqlite3");
-        let conn =
-            rusqlite::Connection::open(path).map_err(|e| PlatformError::Storage(e.to_string()))?;
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS app_settings (id INTEGER PRIMARY KEY CHECK (id = 1), clipboard_timeout_secs INTEGER NOT NULL)",
-            [],
-        ).map_err(|e| PlatformError::Storage(e.to_string()))?;
-
-        let mut stmt = conn
-            .prepare("SELECT clipboard_timeout_secs FROM app_settings WHERE id = 1")
-            .map_err(|e| PlatformError::Storage(e.to_string()))?;
-        let mut rows = stmt
-            .query_map([], |row| {
-                Ok(AppSettings {
-                    clipboard_timeout_secs: row.get(0)?,
-                })
-            })
-            .map_err(|e| PlatformError::Storage(e.to_string()))?;
-
-        match rows.next() {
-            Some(row) => row.map_err(|e| PlatformError::Storage(e.to_string())),
-            None => Ok(AppSettings::default()),
+        let path = self.settings_path()?;
+        match fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|e| PlatformError::Storage(format!("failed to parse settings: {e}"))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(AppSettings::default())
+            }
+            Err(error) => Err(PlatformError::Storage(format!(
+                "failed to read settings: {error}"
+            ))),
         }
     }
 
     fn save_settings(&self, settings: &AppSettings) -> Result<(), Self::Error> {
-        let path = self
-            .data_dir()
-            .map_err(|e| PlatformError::Path(e.to_string()))?
-            .join("vault.sqlite3");
-        let conn =
-            rusqlite::Connection::open(path).map_err(|e| PlatformError::Storage(e.to_string()))?;
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS app_settings (id INTEGER PRIMARY KEY CHECK (id = 1), clipboard_timeout_secs INTEGER NOT NULL)",
-            [],
-        ).map_err(|e| PlatformError::Storage(e.to_string()))?;
-        conn.execute(
-            "INSERT INTO app_settings (id, clipboard_timeout_secs) VALUES (1, ?1) ON CONFLICT(id) DO UPDATE SET clipboard_timeout_secs = excluded.clipboard_timeout_secs",
-            (&settings.clipboard_timeout_secs,),
-        ).map_err(|e| PlatformError::Storage(e.to_string()))?;
+        let path = self.settings_path()?;
+        let bytes = serde_json::to_vec_pretty(settings)
+            .map_err(|e| PlatformError::Storage(format!("failed to serialize settings: {e}")))?;
+        fs::write(path, bytes)
+            .map_err(|e| PlatformError::Storage(format!("failed to write settings: {e}")))?;
         Ok(())
+    }
+}
+
+impl DesktopStore {
+    fn settings_path(&self) -> Result<PathBuf, PlatformError> {
+        Ok(self
+            .config_dir()
+            .map_err(|e| PlatformError::Path(e.to_string()))?
+            .join("settings.json"))
     }
 }
 

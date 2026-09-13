@@ -5,6 +5,8 @@ use crate::{clipboard, storage};
 use dioxus::prelude::*;
 use uuid::Uuid;
 
+const MAIN_CSS: &str = include_str!("../assets/main.css");
+
 #[derive(Clone, Copy, PartialEq)]
 enum Screen {
     Loading,
@@ -42,7 +44,8 @@ pub fn App() -> Element {
     });
 
     rsx! {
-        document::Stylesheet { href: asset!("/assets/main.css") }
+        document::Title { "JPass" }
+        style { {MAIN_CSS} }
         div { class: "app",
             match screen() {
                 Screen::Loading => rsx! { p { "Loading…" } },

@@ -1,5 +1,6 @@
 use jpass_core::{AppSettings, EncryptedBlob};
-use jpass_platform::{ClipboardService, VaultStore};
+use jpass_platform::{BackupService, ClipboardService, VaultStore};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy)]
 pub enum PlatformKind {
@@ -12,6 +13,7 @@ pub enum PlatformKind {
 pub trait PlatformAdapterTrait {
     fn load_vault(&self) -> Result<Option<EncryptedBlob>, String>;
     fn save_vault(&self, blob: &EncryptedBlob) -> Result<(), String>;
+    fn save_encrypted_backup(&self, blob: &EncryptedBlob) -> Result<PathBuf, String>;
     fn load_settings(&self) -> Result<AppSettings, String>;
     fn save_settings(&self, settings: &AppSettings) -> Result<(), String>;
     fn copy_text(&self, text: &str) -> Result<(), String>;
@@ -69,6 +71,21 @@ impl PlatformAdapterTrait for PlatformAdapter {
                 store.save_vault(blob).map_err(|e| e.to_string())
             }
             PlatformKind::Web => Err("Web adapter not implemented in this repo yet".to_string()),
+        }
+    }
+
+    fn save_encrypted_backup(&self, blob: &EncryptedBlob) -> Result<PathBuf, String> {
+        match self.kind {
+            PlatformKind::Desktop => jpass_desktop::desktop_store()
+                .save_encrypted_backup(blob)
+                .map_err(|e| e.to_string()),
+            PlatformKind::Android => jpass_android::android_store()
+                .save_encrypted_backup(blob)
+                .map_err(|e| e.to_string()),
+            PlatformKind::Ios => jpass_ios::ios_store()
+                .save_encrypted_backup(blob)
+                .map_err(|e| e.to_string()),
+            PlatformKind::Web => Err("Web backup adapter not implemented in this repo yet".to_string()),
         }
     }
 

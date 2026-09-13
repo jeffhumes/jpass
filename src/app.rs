@@ -207,6 +207,7 @@ fn VaultScreen(
     let mut show_editor = use_signal(|| false);
     let mut show_folder_modal = use_signal(|| false);
     let mut show_settings = use_signal(|| false);
+    let mut pending_delete = use_signal::<Option<VaultEntry>>(|| None);
     let mut new_folder_name = use_signal(String::new);
     let mut save_error = use_signal::<Option<String>>(|| None);
     let mut notification = use_signal::<Option<ToastState>>(|| None);
@@ -246,6 +247,32 @@ fn VaultScreen(
         let json = v.to_json().map_err(|e| e.to_string())?;
         let blob = crypto::encrypt(&json, &pw).map_err(|_| "encryption failed".to_string())?;
         storage::save_encrypted(&blob).map_err(|e| e.to_string())
+    };
+
+    let mut delete_entry = move |id: Uuid| {
+        if let Some(mut v) = vault() {
+            v.remove_entry(id);
+            match persist(&v) {
+                Ok(()) => {
+                    vault.set(Some(v));
+                    save_error.set(None);
+                }
+                Err(error) => save_error.set(Some(error)),
+            }
+        }
+    };
+
+    let create_backup = move || -> Result<String, String> {
+        let Some(pw) = master_password() else {
+            return Err("Vault is locked.".into());
+        };
+        let Some(current_vault) = vault() else {
+            return Err("Vault is unavailable.".into());
+        };
+        let json = current_vault.to_json().map_err(|e| e.to_string())?;
+        let blob = crypto::encrypt(&json, &pw).map_err(|_| "encryption failed".to_string())?;
+        let path = storage::save_encrypted_backup(&blob).map_err(|e| e.to_string())?;
+        Ok(path.display().to_string())
     };
 
     let lock = move |_| {
@@ -334,6 +361,18 @@ fn VaultScreen(
                     onclick: move |_| show_settings.set(true),
                     "Settings"
                 }
+                button {
+                    class: "secondary-btn",
+                    onclick: move |_| match create_backup() {
+                        Ok(path) => notification.set(Some(ToastState {
+                            label: format!("Backup saved to {path}"),
+                            duration_ms: 5000,
+                            remaining_ms: 5000,
+                        })),
+                        Err(error) => save_error.set(Some(format!("Backup failed: {error}"))),
+                    },
+                    "Backup"
+                }
                 button { class: "lock-btn", onclick: lock, "Lock" }
             }
 
@@ -344,7 +383,7 @@ fn VaultScreen(
             if let Some(toast) = notification_snapshot {
                 div { class: "toast",
                     div { class: "toast-content",
-                        span { "{toast.label} copied" }
+                        span { "{toast.label}" }
                         div { class: "toast-timer-bar",
                             div { class: "toast-timer-fill", style: "width: {toast_progress.unwrap_or(0.0)}%" }
                         }
@@ -428,7 +467,7 @@ fn VaultScreen(
                                             move |_| {
                                                 clipboard::copy_to_clipboard(&username);
                                                 notification.set(Some(ToastState {
-                                                    label: "Username".into(),
+                                                    label: "Username copied".into(),
                                                     duration_ms: timeout.saturating_mul(1000),
                                                     remaining_ms: timeout.saturating_mul(1000),
                                                 }));
@@ -443,7 +482,7 @@ fn VaultScreen(
                                             move |_| {
                                                 clipboard::copy_to_clipboard(&password);
                                                 notification.set(Some(ToastState {
-                                                    label: "Password".into(),
+                                                    label: "Password copied".into(),
                                                     duration_ms: timeout.saturating_mul(1000),
                                                     remaining_ms: timeout.saturating_mul(1000),
                                                 }));
@@ -464,14 +503,12 @@ fn VaultScreen(
                                     button {
                                         class: "danger",
                                         onclick: {
-                                            let id = entry.id;
+                                            let entry = entry.clone();
                                             move |_| {
-                                                if let Some(mut v) = vault() {
-                                                    v.remove_entry(id);
-                                                    match persist(&v) {
-                                                        Ok(()) => { vault.set(Some(v)); save_error.set(None); }
-                                                        Err(e) => save_error.set(Some(e)),
-                                                    }
+                                                if settings().confirm_delete {
+                                                    pending_delete.set(Some(entry.clone()));
+                                                } else {
+                                                    delete_entry(entry.id);
                                                 }
                                             }
                                         },
@@ -579,6 +616,34 @@ fn VaultScreen(
                     on_error: move |message: String| save_error.set(Some(message)),
                 }
             }
+
+            if let Some(entry) = pending_delete() {
+                div { class: "modal-backdrop",
+                    div { class: "modal confirmation-modal",
+                        span { class: "eyebrow danger-eyebrow", "DESTRUCTIVE ACTION" }
+                        h2 { "Delete entry?" }
+                        p { "This will permanently remove ", strong { "{entry.title}" }, " from your vault." }
+                        div { class: "modal-actions",
+                            button {
+                                class: "secondary-btn",
+                                onclick: move |_| pending_delete.set(None),
+                                "Cancel"
+                            }
+                            button {
+                                class: "danger",
+                                onclick: {
+                                    let id = entry.id;
+                                    move |_| {
+                                        delete_entry(id);
+                                        pending_delete.set(None);
+                                    }
+                                },
+                                "Delete entry"
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -631,6 +696,21 @@ fn SettingsDialog(
                         option { value: "dark", "Dark" }
                         option { value: "light", "Light" }
                         option { value: "system", "Use system preference" }
+                    }
+                }
+                div { class: "settings-section settings-toggle",
+                    div {
+                        label { "Confirm before deleting" }
+                        p { class: "settings-help", "Ask for confirmation before permanently removing an entry." }
+                    }
+                    input {
+                        r#type: "checkbox",
+                        checked: settings().confirm_delete,
+                        onchange: move |event| {
+                            let mut updated = settings();
+                            updated.confirm_delete = event.value() == "true";
+                            save(updated);
+                        },
                     }
                 }
                 div { class: "settings-section",

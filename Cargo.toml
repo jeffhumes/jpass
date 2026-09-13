@@ -26,6 +26,7 @@ chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"
 thiserror = "1"
 futures-timer = "3"
+zeroize = "1"
 jpass-core = { path = "crates/jpass-core" }
 jpass-platform = { path = "crates/jpass-platform" }
 jpass-desktop = { path = "crates/jpass-desktop" }

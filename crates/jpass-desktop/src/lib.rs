@@ -1,5 +1,5 @@
 use jpass_core::{AppSettings, EncryptedBlob};
-use jpass_platform::{ClipboardService, PlatformError, PlatformPaths, VaultStore};
+use jpass_platform::{BackupService, ClipboardService, PlatformError, PlatformPaths, VaultStore};
 use std::fs;
 use std::path::PathBuf;
 
@@ -89,6 +89,32 @@ impl DesktopStore {
             .config_dir()
             .map_err(|e| PlatformError::Path(e.to_string()))?
             .join("settings.json"))
+    }
+}
+
+impl BackupService for DesktopStore {
+    type Error = PlatformError;
+
+    fn save_encrypted_backup(&self, blob: &EncryptedBlob) -> Result<PathBuf, Self::Error> {
+        let backup_dir = self
+            .data_dir()
+            .map_err(|e| PlatformError::Path(e.to_string()))?
+            .join("backups");
+        fs::create_dir_all(&backup_dir).map_err(|e| {
+            PlatformError::Storage(format!("failed to create backup directory: {e}"))
+        })?;
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| {
+                PlatformError::Storage(format!("failed to determine backup timestamp: {e}"))
+            })?;
+        let path = backup_dir.join(format!("jpass-backup-{}.json", timestamp.as_millis()));
+        let bytes = serde_json::to_vec_pretty(blob)
+            .map_err(|e| PlatformError::Storage(format!("failed to serialize backup: {e}")))?;
+        fs::write(&path, bytes)
+            .map_err(|e| PlatformError::Storage(format!("failed to write backup: {e}")))?;
+        Ok(path)
     }
 }
 

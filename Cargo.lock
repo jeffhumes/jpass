@@ -3008,6 +3008,7 @@ dependencies = [
  "uuid",
  "wasm-bindgen-futures",
  "web-sys",
+ "zeroize",
 ]
 
 [[package]]

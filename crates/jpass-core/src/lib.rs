@@ -20,6 +20,12 @@ pub struct AppSettings {
     pub clipboard_timeout_secs: u64,
     #[serde(default)]
     pub theme: AppTheme,
+    #[serde(default = "default_confirm_delete")]
+    pub confirm_delete: bool,
+}
+
+fn default_confirm_delete() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -27,6 +33,7 @@ impl Default for AppSettings {
         Self {
             clipboard_timeout_secs: Self::default_timeout(),
             theme: AppTheme::default(),
+            confirm_delete: true,
         }
     }
 }

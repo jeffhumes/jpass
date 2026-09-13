@@ -10,6 +10,12 @@ pub trait VaultStore {
     fn save_settings(&self, settings: &AppSettings) -> Result<(), Self::Error>;
 }
 
+pub trait BackupService {
+    type Error: std::fmt::Display;
+
+    fn save_encrypted_backup(&self, blob: &EncryptedBlob) -> Result<PathBuf, Self::Error>;
+}
+
 pub trait ClipboardService {
     type Error: std::fmt::Display;
 
@@ -34,4 +40,4 @@ pub enum PlatformError {
     Path(String),
 }
 
-pub trait PlatformServices: VaultStore + ClipboardService + PlatformPaths {}
+pub trait PlatformServices: VaultStore + BackupService + ClipboardService + PlatformPaths {}

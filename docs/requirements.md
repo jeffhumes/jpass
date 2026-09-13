@@ -4,6 +4,16 @@ This document contains planned product, security, platform, and usability requir
 
 New requirements are recorded here and in the session project memory so they remain available both in source control and across assistant sessions.
 
+## Requirement Status
+
+- `[ ]` Planned or not yet implemented
+- `[~]` In progress or partially implemented
+- `[x]` Implemented, but retained here for future review
+
+Completed requirements should remain in this document. Revisit them when related code, dependencies, platform adapters, or security assumptions change.
+
+Existing requirements without a marker are treated as planned until explicitly reviewed and given a status.
+
 ## Product Scope
 
 - Support Windows, macOS, Linux, Android, iOS, and web-compatible builds where feasible.
@@ -14,11 +24,12 @@ New requirements are recorded here and in the session project memory so they rem
 
 - Store more than username/password pairs, including SSH keys, API tokens, recovery codes, certificates, and other sensitive fields.
 - Allow optional, user-controlled vault synchronization across supported platforms.
-- Support local vault export and backup.
+- [~] Support local vault export and backup. Encrypted desktop backups are implemented; native file destinations and additional export formats remain pending.
 - Let users choose encrypted/password-protected or plain-text export output.
 - Support formats such as XML, JSON, CSV, TSV, and raw data.
 - Support credential export and import across supported platforms and formats.
 - Validate imported data and provide safe conflict handling.
+- When adding an entry, let users select an existing folder or create a new folder for the entry before saving.
 - Allow users to share selected vault entries via text, with explicit confirmation, sensitivity warnings, and secure handling.
 
 ## Authentication and Recovery
@@ -29,7 +40,9 @@ New requirements are recorded here and in the session project memory so they rem
 
 ## Security
 
-- Always use strong, modern encryption for vault data, backups, synchronization, and sensitive storage or transport.
+- [~] Always use strong, modern encryption for vault data, backups, synchronization, and sensitive storage or transport. Vault encryption is implemented; backup and synchronization encryption remain pending.
+- [x] New vault encryption uses AES-256-GCM with OS-provided randomness and explicit Argon2id key-derivation parameters.
+- [x] Encryption changes must preserve access to existing vaults through a documented migration path.
 - Never weaken encryption for convenience.
 - Check generated and manually entered passwords for weakness, common patterns, reuse indicators, and likely crackability.
 - Use local or privacy-preserving password checks so secrets are not exposed externally.
@@ -59,8 +72,8 @@ New requirements are recorded here and in the session project memory so they rem
 
 ## User Experience
 
-- Prompt users for explicit confirmation before deleting a vault entry by default.
-- Provide a settings option to enable or disable the delete-confirmation prompt.
+- [x] Prompt users for explicit confirmation before deleting a vault entry by default.
+- [x] Provide a settings option to enable or disable the delete-confirmation prompt.
 - Keep delete behavior consistent across supported platforms.
 
 ## Phase 2 Security Monitoring

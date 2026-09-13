@@ -1,5 +1,5 @@
 use jpass_core::{AppSettings, EncryptedBlob};
-use jpass_platform::{ClipboardService, PlatformError, PlatformPaths, VaultStore};
+use jpass_platform::{BackupService, ClipboardService, PlatformError, PlatformPaths, VaultStore};
 use std::path::PathBuf;
 
 pub struct AndroidStore;
@@ -42,6 +42,16 @@ impl ClipboardService for AndroidStore {
     fn clear(&self) -> Result<(), Self::Error> {
         Err(PlatformError::Clipboard(
             "Android clipboard clear requires the Android runtime binding".to_string(),
+        ))
+    }
+}
+
+impl BackupService for AndroidStore {
+    type Error = PlatformError;
+
+    fn save_encrypted_backup(&self, _blob: &EncryptedBlob) -> Result<PathBuf, Self::Error> {
+        Err(PlatformError::Storage(
+            "Android backup destination requires the native file picker binding".to_string(),
         ))
     }
 }

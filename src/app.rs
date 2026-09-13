@@ -3,7 +3,9 @@ use crate::model::{Vault, VaultEntry, VaultFolder};
 use crate::password_gen::{generate_password, PasswordOptions};
 use crate::{clipboard, storage};
 use dioxus::prelude::*;
+use futures_util::StreamExt;
 use jpass_core::{AppSettings, AppTheme, EntryActionDisplay, PrimaryActionDisplay};
+use std::time::Instant;
 use uuid::Uuid;
 
 const MAIN_CSS: &str = include_str!("../assets/main.css");
@@ -21,6 +23,11 @@ struct ToastState {
     label: String,
     duration_ms: u64,
     remaining_ms: u64,
+}
+
+enum ToastCommand {
+    Show(ToastState),
+    Cancel,
 }
 
 #[allow(non_snake_case)]
@@ -212,32 +219,38 @@ fn VaultScreen(
     let mut new_folder_name = use_signal(String::new);
     let mut save_error = use_signal::<Option<String>>(|| None);
     let mut notification = use_signal::<Option<ToastState>>(|| None);
-    let mut settings = use_signal(|| storage::load_settings().unwrap_or_default());
-    let clipboard_timeout = settings().clipboard_timeout_secs.max(1);
+    let settings = use_signal(|| storage::load_settings().unwrap_or_default());
 
-    let _copy_timer = use_future(move || {
-        let active = notification();
+    let copy_timer = use_coroutine(move |mut commands: UnboundedReceiver<ToastCommand>| async move {
+        while let Some(command) = commands.next().await {
+            match command {
+                ToastCommand::Cancel => notification.set(None),
+                ToastCommand::Show(current) => {
+                    let total_ms = current.duration_ms.max(1);
+                    let started = Instant::now();
+                    notification.set(Some(ToastState {
+                        label: current.label.clone(),
+                        duration_ms: total_ms,
+                        remaining_ms: total_ms,
+                    }));
 
-        async move {
-            let Some(current) = active else {
-                return;
-            };
-
-            let total_ms = current.duration_ms.max(1);
-            let mut remaining = current.remaining_ms.max(1);
-
-            while remaining > 0 {
-                futures_timer::Delay::new(std::time::Duration::from_millis(50)).await;
-                remaining = remaining.saturating_sub(50);
-                notification.set(Some(ToastState {
-                    label: current.label.clone(),
-                    duration_ms: total_ms,
-                    remaining_ms: remaining.max(0),
-                }));
+                    loop {
+                        futures_timer::Delay::new(std::time::Duration::from_millis(50)).await;
+                        let elapsed_ms = started.elapsed().as_millis() as u64;
+                        let remaining = total_ms.saturating_sub(elapsed_ms);
+                        if remaining == 0 {
+                            notification.set(None);
+                            clipboard::clear_clipboard();
+                            break;
+                        }
+                        notification.set(Some(ToastState {
+                            label: current.label.clone(),
+                            duration_ms: total_ms,
+                            remaining_ms: remaining,
+                        }));
+                    }
+                }
             }
-
-            notification.set(None);
-            clipboard::clear_clipboard();
         }
     });
 
@@ -347,29 +360,6 @@ fn VaultScreen(
                     value: "{search}",
                     oninput: move |e| search.set(e.value()),
                 }
-                div { class: "clipboard-setting",
-                    label { "Keep clipboard for " }
-                    select {
-                        value: "{clipboard_timeout}",
-                        onchange: move |e| {
-                            if let Ok(value) = e.value().parse::<u64>() {
-                                let timeout = value.max(1);
-                                let mut updated = settings();
-                                updated.clipboard_timeout_secs = timeout;
-                                if let Err(err) = storage::save_settings(&updated) {
-                                    save_error.set(Some(format!("Failed to save clipboard setting: {err}")));
-                                } else {
-                                    settings.set(updated);
-                                    save_error.set(None);
-                                }
-                            }
-                        },
-                        option { value: "5", "5s" }
-                        option { value: "10", "10s" }
-                        option { value: "20", "20s" }
-                        option { value: "60", "60s" }
-                    }
-                }
                 button {
                     class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "icon-button primary-action" } else { "primary-action" },
                     title: "Add entry",
@@ -402,7 +392,7 @@ fn VaultScreen(
                     title: "Create backup",
                     aria_label: "Create backup",
                     onclick: move |_| match create_backup() {
-                        Ok(path) => notification.set(Some(ToastState {
+                        Ok(path) => copy_timer.send(ToastCommand::Show(ToastState {
                             label: format!("Backup saved to {path}"),
                             duration_ms: 5000,
                             remaining_ms: 5000,
@@ -434,7 +424,7 @@ fn VaultScreen(
                     }
                     button {
                         class: "toast-close",
-                        onclick: move |_| notification.set(None),
+                        onclick: move |_| copy_timer.send(ToastCommand::Cancel),
                         "×"
                     }
                 }
@@ -488,7 +478,7 @@ fn VaultScreen(
                                             let timeout = settings().clipboard_timeout_secs.max(1);
                                             move |_| {
                                                 clipboard::copy_to_clipboard(&username);
-                                                notification.set(Some(ToastState {
+                                                copy_timer.send(ToastCommand::Show(ToastState {
                                                     label: "Username copied".into(),
                                                     duration_ms: timeout.saturating_mul(1000),
                                                     remaining_ms: timeout.saturating_mul(1000),
@@ -506,7 +496,7 @@ fn VaultScreen(
                                             let timeout = settings().clipboard_timeout_secs.max(1);
                                             move |_| {
                                                 clipboard::copy_to_clipboard(&password);
-                                                notification.set(Some(ToastState {
+                                                copy_timer.send(ToastCommand::Show(ToastState {
                                                     label: "Password copied".into(),
                                                     duration_ms: timeout.saturating_mul(1000),
                                                     remaining_ms: timeout.saturating_mul(1000),

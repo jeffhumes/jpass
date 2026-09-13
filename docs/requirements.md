@@ -84,6 +84,8 @@ Existing requirements without a marker are treated as planned until explicitly r
 - [x] Remove the folder dropdown from entry rows and replace it with a dedicated Move button or icon.
 - [x] Allow the Move Entry dialog to create a new folder and move the selected entry into it.
 - [x] Keep Clipboard control honors the selected display theme with matching wrapper, label, select, focus, border, and surface styling.
+- [x] Remove the Keep Clipboard timeout dropdown from the main screen and place it in the Settings dialog.
+- [x] Copy username/password toast notifications show a working countdown and automatically clear the clipboard when the timer expires.
 - Deferred Linux issue: investigate why the GTK/WebKit desktop build may render but not accept clicks in the master-password field or buttons. Current startup workarounds disable WebKit DMA-BUF/compositing, use software GL, and disable Dioxus debug always-on-top; a native Linux renderer or deeper GTK/WebKit investigation may be needed.
 
 ## Phase 2 Security Monitoring

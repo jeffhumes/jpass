@@ -3,7 +3,7 @@ use crate::model::{Vault, VaultEntry, VaultFolder};
 use crate::password_gen::{generate_password, PasswordOptions};
 use crate::{clipboard, storage};
 use dioxus::prelude::*;
-use jpass_core::{AppSettings, AppTheme};
+use jpass_core::{AppSettings, AppTheme, EntryActionDisplay};
 use uuid::Uuid;
 
 const MAIN_CSS: &str = include_str!("../assets/main.css");
@@ -461,6 +461,9 @@ fn VaultScreen(
                                         }
                                     }
                                     button {
+                                        class: if settings().entry_action_display == EntryActionDisplay::Icons { "icon-button" } else { "" },
+                                        title: "Copy username",
+                                        aria_label: "Copy username",
                                         onclick: {
                                             let username = entry.username.clone();
                                             let timeout = settings().clipboard_timeout_secs.max(1);
@@ -473,9 +476,12 @@ fn VaultScreen(
                                                 }));
                                             }
                                         },
-                                        "Copy user"
+                                        if settings().entry_action_display == EntryActionDisplay::Icons { "↥" } else { "Copy user" }
                                     }
                                     button {
+                                        class: if settings().entry_action_display == EntryActionDisplay::Icons { "icon-button" } else { "" },
+                                        title: "Copy password",
+                                        aria_label: "Copy password",
                                         onclick: {
                                             let password = entry.password.clone();
                                             let timeout = settings().clipboard_timeout_secs.max(1);
@@ -488,9 +494,12 @@ fn VaultScreen(
                                                 }));
                                             }
                                         },
-                                        "Copy pass"
+                                        if settings().entry_action_display == EntryActionDisplay::Icons { "⚿" } else { "Copy pass" }
                                     }
                                     button {
+                                        class: if settings().entry_action_display == EntryActionDisplay::Icons { "icon-button" } else { "" },
+                                        title: "Edit entry",
+                                        aria_label: "Edit entry",
                                         onclick: {
                                             let entry = entry.clone();
                                             move |_| {
@@ -498,10 +507,12 @@ fn VaultScreen(
                                                 show_editor.set(true);
                                             }
                                         },
-                                        "Edit"
+                                        if settings().entry_action_display == EntryActionDisplay::Icons { "✎" } else { "Edit" }
                                     }
                                     button {
-                                        class: "danger",
+                                        class: if settings().entry_action_display == EntryActionDisplay::Icons { "danger icon-button" } else { "danger" },
+                                        title: "Delete entry",
+                                        aria_label: "Delete entry",
                                         onclick: {
                                             let entry = entry.clone();
                                             move |_| {
@@ -512,7 +523,7 @@ fn VaultScreen(
                                                 }
                                             }
                                         },
-                                        "Delete"
+                                        if settings().entry_action_display == EntryActionDisplay::Icons { "⌫" } else { "Delete" }
                                     }
                                 }
                             }
@@ -721,6 +732,27 @@ fn SettingsDialog(
                             updated.confirm_delete = event.value() == "true";
                             save(updated);
                         },
+                    }
+                }
+                div { class: "settings-section",
+                    label { "Entry actions" }
+                    p { class: "settings-help", "Choose descriptive buttons or compact icons in each entry row." }
+                    select {
+                        value: match settings().entry_action_display {
+                            EntryActionDisplay::Text => "text",
+                            EntryActionDisplay::Icons => "icons",
+                        },
+                        onchange: move |event| {
+                            let mut updated = settings();
+                            updated.entry_action_display = if event.value() == "icons" {
+                                EntryActionDisplay::Icons
+                            } else {
+                                EntryActionDisplay::Text
+                            };
+                            save(updated);
+                        },
+                        option { value: "text", "Text buttons" }
+                        option { value: "icons", "Compact icons" }
                     }
                 }
                 div { class: "settings-section",

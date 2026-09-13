@@ -310,6 +310,14 @@ button.lock-btn {
   font-size: 0.78rem;
 }
 
+.entry-actions .icon-button {
+  width: 36px;
+  min-width: 36px;
+  padding: 0.35rem;
+  font-size: 1rem;
+  line-height: 1;
+}
+
 textarea {
   min-height: 96px;
   resize: vertical;

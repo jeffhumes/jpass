@@ -75,7 +75,8 @@ Existing requirements without a marker are treated as planned until explicitly r
 - [x] Prompt users for explicit confirmation before deleting a vault entry by default.
 - [x] Provide a settings option to enable or disable the delete-confirmation prompt.
 - Keep delete behavior consistent across supported platforms.
-- Let users choose whether entry-list actions display descriptive text buttons or compact icons, with the preference available in the Settings dialog.
+- [x] Let users choose whether entry-list actions display descriptive text buttons or compact icons, with the preference available in the Settings dialog.
+- Later UI refinement: remove the folder dropdown from entry rows and replace it with a dedicated Move button or icon.
 
 ## Phase 2 Security Monitoring
 

@@ -1,0 +1,12 @@
+[application]
+name = "jpass"
+default_platform = "desktop"
+
+[web.app]
+title = "JPass"
+
+[web.watcher]
+watch_path = ["src", "assets"]
+
+[web.resource]
+style = ["assets/main.css"]

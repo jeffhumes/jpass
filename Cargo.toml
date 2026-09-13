@@ -1,0 +1,42 @@
+[package]
+name = "jpass"
+version = "0.1.0"
+edition = "2021"
+description = "A cross-platform password keeper built with Rust and Dioxus"
+
+[dependencies]
+dioxus = { version = "0.7", default-features = false, features = ["macro", "html", "signals", "hooks", "launch", "document", "asset"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+argon2 = "0.6"
+aes-gcm = "0.11"
+rand = "0.8"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+thiserror = "1"
+futures-timer = "3"
+
+# Native-only (desktop) dependencies, pulled in by the "desktop" feature
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+directories = { version = "5", optional = true }
+arboard = { version = "3", optional = true }
+
+# Web-only (wasm32) dependencies, pulled in by the "web" feature
+gloo-storage = { version = "0.3", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", optional = true, features = ["Clipboard", "Navigator", "Window"] }
+getrandom = { version = "0.4", optional = true, features = ["wasm_js"] }
+getrandom02 = { package = "getrandom", version = "0.2", optional = true, features = ["js"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+uuid = { version = "1", features = ["js"] }
+
+[features]
+default = ["desktop"]
+desktop = ["dioxus/desktop", "dep:rusqlite", "dep:directories", "dep:arboard"]
+web = ["dioxus/web", "dep:gloo-storage", "dep:wasm-bindgen-futures", "dep:web-sys", "dep:getrandom", "dep:getrandom02"]
+
+[profile.release]
+opt-level = "z"
+lto = true

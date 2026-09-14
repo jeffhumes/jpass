@@ -32,6 +32,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 - Support credential export and import across supported platforms and formats.
 - Validate imported data and provide safe conflict handling.
 - [x] When adding an entry, let users select an existing folder or create a new folder for the entry before saving.
+- Provide a folder manager that lets users add, delete, and rename folders, and move entries between folders.
 - Allow users to share selected vault entries via text, with explicit confirmation, sensitivity warnings, and secure handling.
 
 ## Authentication and Recovery
@@ -57,6 +58,8 @@ Existing requirements without a marker are treated as planned until explicitly r
 - [~] Provide an easy-to-use standalone password generator without requiring a vault entry. Standalone generation, customization, and copy are implemented; generated-password history remains pending.
 - [x] Allow users to adjust generated password length.
 - [x] Allow users to choose character sets, including special characters, numbers, lowercase letters, and uppercase letters.
+- [x] Let users configure how passwords are generated in the Edit Entry dialog: auto-generate directly or open the full password generator.
+- [x] Allow users to configure password-generator defaults in Settings, including default length and enabled character classes.
 - Support extensible generation options.
 - Provide a user-controlled history of generated passwords.
 - Store password history securely and allow users to clear it.

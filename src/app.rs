@@ -4,7 +4,10 @@ use crate::password_gen::{generate_password, PasswordOptions};
 use crate::{clipboard, storage};
 use dioxus::prelude::*;
 use futures_util::StreamExt;
-use jpass_core::{AppSettings, AppTheme, EntryActionDisplay, PrimaryActionDisplay, ToastPosition};
+use jpass_core::{
+    AppSettings, AppTheme, EditPasswordGenerationMode, EntryActionDisplay, PrimaryActionDisplay,
+    ToastPosition,
+};
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -215,6 +218,8 @@ fn VaultScreen(
     let mut show_folder_modal = use_signal(|| false);
     let mut show_settings = use_signal(|| false);
     let mut show_generator = use_signal(|| false);
+    let mut show_entry_generator = use_signal(|| false);
+    let mut generated_entry_password = use_signal::<Option<String>>(|| None);
     let mut pending_delete = use_signal::<Option<VaultEntry>>(|| None);
     let mut pending_move = use_signal::<Option<VaultEntry>>(|| None);
     let mut new_folder_name = use_signal(String::new);
@@ -586,6 +591,9 @@ fn VaultScreen(
                 if let Some(entry) = editing() {
                     EntryEditor {
                         entry,
+                        settings,
+                        generated_password: generated_entry_password,
+                        on_open_generator: move |_| show_entry_generator.set(true),
                         folders: folders_for_select.clone(),
                         on_cancel: move |_| show_editor.set(false),
                         on_save: move |(mut updated, new_folder_name): (VaultEntry, Option<String>)| {
@@ -690,6 +698,7 @@ fn VaultScreen(
 
             if show_generator() {
                 PasswordGeneratorDialog {
+                    settings,
                     on_close: move |_| show_generator.set(false),
                     on_copy: move |password: String| {
                         let timeout = settings().clipboard_timeout_secs.max(1);
@@ -699,6 +708,36 @@ fn VaultScreen(
                             duration_ms: timeout.saturating_mul(1000),
                             remaining_ms: timeout.saturating_mul(1000),
                         }));
+                    },
+                    on_use: move |password: String| {
+                        let timeout = settings().clipboard_timeout_secs.max(1);
+                        clipboard::copy_to_clipboard(&password);
+                        copy_timer.send(ToastCommand::Show(ToastState {
+                            label: "Generated password copied".into(),
+                            duration_ms: timeout.saturating_mul(1000),
+                            remaining_ms: timeout.saturating_mul(1000),
+                        }));
+                        show_generator.set(false);
+                    },
+                }
+            }
+
+            if show_entry_generator() {
+                PasswordGeneratorDialog {
+                    settings,
+                    on_close: move |_| show_entry_generator.set(false),
+                    on_copy: move |password: String| {
+                        let timeout = settings().clipboard_timeout_secs.max(1);
+                        clipboard::copy_to_clipboard(&password);
+                        copy_timer.send(ToastCommand::Show(ToastState {
+                            label: "Generated password copied".into(),
+                            duration_ms: timeout.saturating_mul(1000),
+                            remaining_ms: timeout.saturating_mul(1000),
+                        }));
+                    },
+                    on_use: move |password: String| {
+                        generated_entry_password.set(Some(password));
+                        show_entry_generator.set(false);
                     },
                 }
             }
@@ -931,6 +970,51 @@ fn SettingsDialog(
                         option { value: "bottom-right", "Bottom right" }
                     }
                 }
+                div { class: "settings-section",
+                    label { "Password generator defaults" }
+                    p { class: "settings-help", "These defaults apply to the standalone generator and Edit Entry." }
+                    label { "Default length" }
+                    input {
+                        r#type: "number",
+                        min: "4",
+                        max: "128",
+                        value: "{settings().generator_length}",
+                        onchange: move |event| {
+                            if let Ok(length) = event.value().parse::<usize>() {
+                                let mut updated = settings();
+                                updated.generator_length = length.clamp(4, 128);
+                                save(updated);
+                            }
+                        },
+                    }
+                    div { class: "generator-options",
+                        label { input { r#type: "checkbox", checked: settings().generator_lowercase, onchange: move |event| { let mut updated = settings(); updated.generator_lowercase = event.value() == "true"; save(updated); } } " Lowercase" }
+                        label { input { r#type: "checkbox", checked: settings().generator_uppercase, onchange: move |event| { let mut updated = settings(); updated.generator_uppercase = event.value() == "true"; save(updated); } } " Uppercase" }
+                        label { input { r#type: "checkbox", checked: settings().generator_digits, onchange: move |event| { let mut updated = settings(); updated.generator_digits = event.value() == "true"; save(updated); } } " Numbers" }
+                        label { input { r#type: "checkbox", checked: settings().generator_symbols, onchange: move |event| { let mut updated = settings(); updated.generator_symbols = event.value() == "true"; save(updated); } } " Special characters" }
+                    }
+                }
+                div { class: "settings-section",
+                    label { "Edit Entry password generation" }
+                    p { class: "settings-help", "Choose direct generation or open the full generator when editing an entry." }
+                    select {
+                        value: match settings().edit_password_generation_mode {
+                            EditPasswordGenerationMode::AutoGenerate => "auto",
+                            EditPasswordGenerationMode::FullGenerator => "full",
+                        },
+                        onchange: move |event| {
+                            let mut updated = settings();
+                            updated.edit_password_generation_mode = if event.value() == "full" {
+                                EditPasswordGenerationMode::FullGenerator
+                            } else {
+                                EditPasswordGenerationMode::AutoGenerate
+                            };
+                            save(updated);
+                        },
+                        option { value: "auto", "Auto-generate directly" }
+                        option { value: "full", "Open full password generator" }
+                    }
+                }
                 div { class: "modal-actions",
                     button { class: "primary", onclick: move |_| on_close.call(()), "Done" }
                 }
@@ -940,13 +1024,26 @@ fn SettingsDialog(
 }
 
 #[component]
-fn PasswordGeneratorDialog(on_close: EventHandler<()>, on_copy: EventHandler<String>) -> Element {
-    let mut length = use_signal(|| PasswordOptions::default().length.to_string());
-    let mut lowercase = use_signal(|| true);
-    let mut uppercase = use_signal(|| true);
-    let mut digits = use_signal(|| true);
-    let mut symbols = use_signal(|| true);
-    let mut generated = use_signal(|| generate_password(PasswordOptions::default()));
+fn PasswordGeneratorDialog(
+    settings: Signal<AppSettings>,
+    on_close: EventHandler<()>,
+    on_copy: EventHandler<String>,
+    on_use: EventHandler<String>,
+) -> Element {
+    let mut length = use_signal(|| settings().generator_length.to_string());
+    let mut lowercase = use_signal(|| settings().generator_lowercase);
+    let mut uppercase = use_signal(|| settings().generator_uppercase);
+    let mut digits = use_signal(|| settings().generator_digits);
+    let mut symbols = use_signal(|| settings().generator_symbols);
+    let mut generated = use_signal(|| {
+        generate_password(PasswordOptions {
+            length: settings().generator_length,
+            lowercase: settings().generator_lowercase,
+            uppercase: settings().generator_uppercase,
+            digits: settings().generator_digits,
+            symbols: settings().generator_symbols,
+        })
+    });
 
     let mut generate = move || {
         let length = length().parse::<usize>().unwrap_or(20).clamp(4, 128);
@@ -987,6 +1084,7 @@ fn PasswordGeneratorDialog(on_close: EventHandler<()>, on_copy: EventHandler<Str
                 div { class: "modal-actions",
                     button { class: "secondary-btn", onclick: move |_| generate(), "Generate" }
                     button { class: "primary", onclick: move |_| on_copy.call(generated()), "Copy" }
+                    button { class: "primary", onclick: move |_| on_use.call(generated()), "Use password" }
                     button { class: "primary", onclick: move |_| on_close.call(()), "Done" }
                 }
             }
@@ -1066,9 +1164,12 @@ fn MoveEntryDialog(
 #[component]
 fn EntryEditor(
     entry: VaultEntry,
+    settings: Signal<AppSettings>,
+    generated_password: Signal<Option<String>>,
     folders: Vec<VaultFolder>,
     on_save: EventHandler<(VaultEntry, Option<String>)>,
     on_cancel: EventHandler<()>,
+    on_open_generator: EventHandler<()>,
 ) -> Element {
     let mut title = use_signal(|| entry.title.clone());
     let mut username = use_signal(|| entry.username.clone());
@@ -1082,6 +1183,13 @@ fn EntryEditor(
 
     let entry_id = entry.id;
     let created_at = entry.created_at;
+
+    use_effect(move || {
+        if let Some(value) = generated_password() {
+            password.set(value);
+            generated_password.set(None);
+        }
+    });
 
     rsx! {
         div { class: "modal-backdrop",
@@ -1100,7 +1208,19 @@ fn EntryEditor(
                     }
                     button { onclick: move |_| reveal.set(!reveal()), if reveal() { "Hide" } else { "Show" } }
                     button {
-                        onclick: move |_| password.set(generate_password(PasswordOptions::default())),
+                        onclick: move |_| {
+                            if settings().edit_password_generation_mode == EditPasswordGenerationMode::FullGenerator {
+                                on_open_generator.call(());
+                            } else {
+                                password.set(generate_password(PasswordOptions {
+                                    length: settings().generator_length.clamp(4, 128),
+                                    lowercase: settings().generator_lowercase,
+                                    uppercase: settings().generator_uppercase,
+                                    digits: settings().generator_digits,
+                                    symbols: settings().generator_symbols,
+                                }));
+                            }
+                        },
                         "Generate"
                     }
                 }

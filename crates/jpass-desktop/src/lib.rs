@@ -1,9 +1,57 @@
-use jpass_core::{AppSettings, EncryptedBlob};
-use jpass_platform::{BackupService, ClipboardService, PlatformError, PlatformPaths, VaultStore};
+use jpass_core::{AppSettings, EncryptedBlob, SyncEnvelope};
+use jpass_platform::{
+    BackupService, ClipboardService, PlatformError, PlatformPaths, SyncTransport, VaultStore,
+};
 use std::fs;
 use std::path::PathBuf;
 
 pub struct DesktopStore;
+
+pub struct LocalFolderSync {
+    folder: PathBuf,
+}
+
+impl LocalFolderSync {
+    pub fn new(folder: impl Into<PathBuf>) -> Result<Self, PlatformError> {
+        let folder = folder.into();
+        fs::create_dir_all(&folder)
+            .map_err(|e| PlatformError::Storage(format!("failed to create sync folder: {e}")))?;
+        Ok(Self { folder })
+    }
+
+    fn sync_path(&self) -> PathBuf {
+        self.folder.join("jpass-sync.json")
+    }
+}
+
+impl SyncTransport for LocalFolderSync {
+    type Error = PlatformError;
+
+    fn upload(&self, envelope: &SyncEnvelope) -> Result<(), Self::Error> {
+        let bytes = serde_json::to_vec_pretty(envelope).map_err(|e| {
+            PlatformError::Storage(format!("failed to serialize sync envelope: {e}"))
+        })?;
+        fs::write(self.sync_path(), bytes)
+            .map_err(|e| PlatformError::Storage(format!("failed to write sync envelope: {e}")))
+    }
+
+    fn download(&self) -> Result<Option<SyncEnvelope>, Self::Error> {
+        let path = self.sync_path();
+        match fs::read(path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|e| PlatformError::Storage(format!("failed to parse sync envelope: {e}"))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(PlatformError::Storage(format!(
+                "failed to read sync envelope: {error}"
+            ))),
+        }
+    }
+}
+
+pub fn local_folder_sync(folder: impl Into<PathBuf>) -> Result<LocalFolderSync, PlatformError> {
+    LocalFolderSync::new(folder)
+}
 
 impl VaultStore for DesktopStore {
     type Error = PlatformError;
@@ -166,4 +214,48 @@ impl PlatformPaths for DesktopStore {
 
 pub fn desktop_store() -> DesktopStore {
     DesktopStore
+}
+
+#[cfg(test)]
+mod sync_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_folder() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "jpass-sync-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn local_folder_sync_round_trip() {
+        let folder = test_folder();
+        let sync = LocalFolderSync::new(&folder).unwrap();
+        let envelope = SyncEnvelope::new(
+            "test-device",
+            7,
+            EncryptedBlob {
+                salt: "salt".into(),
+                nonce: "nonce".into(),
+                ciphertext: "ciphertext".into(),
+            },
+        );
+
+        sync.upload(&envelope).unwrap();
+        assert_eq!(sync.download().unwrap(), Some(envelope));
+        let _ = fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn local_folder_sync_reports_missing_envelope() {
+        let folder = test_folder();
+        let sync = LocalFolderSync::new(&folder).unwrap();
+
+        assert_eq!(sync.download().unwrap(), None);
+        let _ = fs::remove_dir_all(folder);
+    }
 }

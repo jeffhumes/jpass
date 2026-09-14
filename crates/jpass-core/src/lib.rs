@@ -95,6 +95,16 @@ pub struct AppSettings {
     pub generator_symbols: bool,
     #[serde(default)]
     pub edit_password_generation_mode: EditPasswordGenerationMode,
+    #[serde(default)]
+    pub sync_enabled: bool,
+    #[serde(default)]
+    pub sync_folder: Option<String>,
+    #[serde(default = "default_sync_device_id")]
+    pub sync_device_id: String,
+    #[serde(default)]
+    pub sync_revision: u64,
+    #[serde(default)]
+    pub last_sync_at: Option<DateTime<Utc>>,
 }
 
 fn default_confirm_delete() -> bool {
@@ -107,6 +117,10 @@ fn default_generator_length() -> usize {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_sync_device_id() -> String {
+    Uuid::new_v4().to_string()
 }
 
 impl Default for AppSettings {
@@ -124,6 +138,11 @@ impl Default for AppSettings {
             generator_digits: true,
             generator_symbols: true,
             edit_password_generation_mode: EditPasswordGenerationMode::default(),
+            sync_enabled: false,
+            sync_folder: None,
+            sync_device_id: default_sync_device_id(),
+            sync_revision: 0,
+            last_sync_at: None,
         }
     }
 }
@@ -260,11 +279,34 @@ impl Vault {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EncryptedBlob {
     pub salt: String,
     pub nonce: String,
     pub ciphertext: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SyncEnvelope {
+    pub schema_version: u32,
+    pub device_id: String,
+    pub revision: u64,
+    pub modified_at: DateTime<Utc>,
+    pub vault: EncryptedBlob,
+}
+
+impl SyncEnvelope {
+    pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+    pub fn new(device_id: impl Into<String>, revision: u64, vault: EncryptedBlob) -> Self {
+        Self {
+            schema_version: Self::CURRENT_SCHEMA_VERSION,
+            device_id: device_id.into(),
+            revision,
+            modified_at: Utc::now(),
+            vault,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

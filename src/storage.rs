@@ -4,7 +4,9 @@
 //! longer tied directly to a desktop-only implementation.
 
 use crate::platform::{PlatformAdapter, PlatformAdapterTrait};
+use jpass_core::SyncEnvelope;
 pub use jpass_core::{AppSettings, EncryptedBlob};
+use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
@@ -45,5 +47,19 @@ pub fn save_encrypted_backup(blob: &EncryptedBlob) -> Result<PathBuf, StorageErr
     let adapter = PlatformAdapter::current();
     adapter
         .save_encrypted_backup(blob)
+        .map_err(|e| StorageError::Backend(e.to_string()))
+}
+
+pub fn upload_sync(folder: &Path, envelope: &SyncEnvelope) -> Result<(), StorageError> {
+    let adapter = PlatformAdapter::current();
+    adapter
+        .upload_sync(folder, envelope)
+        .map_err(|e| StorageError::Backend(e.to_string()))
+}
+
+pub fn download_sync(folder: &Path) -> Result<Option<SyncEnvelope>, StorageError> {
+    let adapter = PlatformAdapter::current();
+    adapter
+        .download_sync(folder)
         .map_err(|e| StorageError::Backend(e.to_string()))
 }

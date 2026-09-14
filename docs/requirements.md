@@ -23,7 +23,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 ## Vault and Data
 
 - Store more than username/password pairs, including SSH keys, API tokens, recovery codes, certificates, and other sensitive fields.
-- Allow optional, user-controlled vault synchronization across supported platforms.
+- [~] Allow optional, user-controlled vault synchronization across supported platforms. Shared encrypted sync envelopes, a desktop local-folder provider, Settings controls, and Sync Now with remote-newer protection are implemented; restore, full conflict resolution, folder pickers, and other transports remain pending.
 - [~] Support local vault export and backup. Encrypted desktop backups are implemented; native file destinations and additional export formats remain pending.
 - Support restoring from a backup with validation before applying changes.
 - Allow users to cherry-pick individual entries, folders, or selected backup content to restore instead of requiring a full-vault restore.

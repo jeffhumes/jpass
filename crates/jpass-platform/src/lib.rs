@@ -1,4 +1,4 @@
-use jpass_core::{AppSettings, EncryptedBlob};
+use jpass_core::{AppSettings, EncryptedBlob, SyncEnvelope};
 use std::path::PathBuf;
 
 pub trait VaultStore {
@@ -14,6 +14,13 @@ pub trait BackupService {
     type Error: std::fmt::Display;
 
     fn save_encrypted_backup(&self, blob: &EncryptedBlob) -> Result<PathBuf, Self::Error>;
+}
+
+pub trait SyncTransport {
+    type Error: std::fmt::Display;
+
+    fn upload(&self, envelope: &SyncEnvelope) -> Result<(), Self::Error>;
+    fn download(&self) -> Result<Option<SyncEnvelope>, Self::Error>;
 }
 
 pub trait ClipboardService {

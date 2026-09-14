@@ -1,5 +1,7 @@
 use jpass_core::{AppSettings, EncryptedBlob};
-use jpass_platform::{BackupService, ClipboardService, VaultStore};
+use jpass_platform::{BackupService, ClipboardService, SyncTransport, VaultStore};
+use jpass_core::SyncEnvelope;
+use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy)]
@@ -18,6 +20,8 @@ pub trait PlatformAdapterTrait {
     fn save_settings(&self, settings: &AppSettings) -> Result<(), String>;
     fn copy_text(&self, text: &str) -> Result<(), String>;
     fn clear(&self) -> Result<(), String>;
+    fn upload_sync(&self, folder: &Path, envelope: &SyncEnvelope) -> Result<(), String>;
+    fn download_sync(&self, folder: &Path) -> Result<Option<SyncEnvelope>, String>;
 }
 
 #[derive(Clone, Copy)]
@@ -195,6 +199,28 @@ impl PlatformAdapterTrait for PlatformAdapter {
                 store.clear().map_err(|e| e.to_string())
             }
             PlatformKind::Web => Err("Web adapter not implemented in this repo yet".to_string()),
+        }
+    }
+
+    fn upload_sync(&self, folder: &Path, envelope: &SyncEnvelope) -> Result<(), String> {
+        match self.kind {
+            #[cfg(feature = "desktop")]
+            PlatformKind::Desktop => jpass_desktop::local_folder_sync(folder)
+                .map_err(|e| e.to_string())?
+                .upload(envelope)
+                .map_err(|e| e.to_string()),
+            _ => Err("Sync transport is not implemented for this platform".to_string()),
+        }
+    }
+
+    fn download_sync(&self, folder: &Path) -> Result<Option<SyncEnvelope>, String> {
+        match self.kind {
+            #[cfg(feature = "desktop")]
+            PlatformKind::Desktop => jpass_desktop::local_folder_sync(folder)
+                .map_err(|e| e.to_string())?
+                .download()
+                .map_err(|e| e.to_string()),
+            _ => Err("Sync transport is not implemented for this platform".to_string()),
         }
     }
 }

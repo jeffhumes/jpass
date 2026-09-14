@@ -5,7 +5,7 @@ use crate::{clipboard, storage};
 use dioxus::prelude::*;
 use jpass_core::{
     AppSettings, AppTheme, EditPasswordGenerationMode, EntryActionDisplay, PrimaryActionDisplay,
-    ToastPosition,
+    SyncEnvelope, ToastPosition,
 };
 use uuid::Uuid;
 
@@ -224,7 +224,7 @@ fn VaultScreen(
     let mut new_folder_name = use_signal(String::new);
     let mut save_error = use_signal::<Option<String>>(|| None);
     let mut notification = use_signal::<Vec<ToastState>>(Vec::new);
-    let settings = use_signal(|| storage::load_settings().unwrap_or_default());
+    let mut settings = use_signal(|| storage::load_settings().unwrap_or_default());
 
     let copy_timer = use_coroutine(
         move |mut commands: UnboundedReceiver<ToastCommand>| async move {
@@ -349,6 +349,43 @@ fn VaultScreen(
         Ok(path.display().to_string())
     };
 
+    let mut sync_now = move || -> Result<String, String> {
+        let current_settings = settings();
+        if !current_settings.sync_enabled {
+            return Err("Sync is disabled in Settings.".into());
+        }
+        let Some(folder) = current_settings.sync_folder.as_deref() else {
+            return Err("Choose a local sync folder in Settings first.".into());
+        };
+        let Some(password) = master_password() else {
+            return Err("Vault is locked.".into());
+        };
+        let Some(current_vault) = vault() else {
+            return Err("Vault is unavailable.".into());
+        };
+        let json = current_vault.to_json().map_err(|e| e.to_string())?;
+        let blob = crypto::encrypt(&json, &password).map_err(|_| "encryption failed".to_string())?;
+        let remote = storage::download_sync(std::path::Path::new(folder)).map_err(|e| e.to_string())?;
+        if let Some(remote) = remote {
+            if remote.revision > current_settings.sync_revision {
+                return Err(format!(
+                    "Sync conflict: remote revision {} is newer than local revision {}.",
+                    remote.revision, current_settings.sync_revision
+                ));
+            }
+        }
+        let revision = current_settings.sync_revision + 1;
+        let envelope = SyncEnvelope::new(current_settings.sync_device_id.clone(), revision, blob);
+        storage::upload_sync(std::path::Path::new(folder), &envelope)
+            .map_err(|e| e.to_string())?;
+        let mut updated = current_settings;
+        updated.sync_revision = revision;
+        updated.last_sync_at = Some(chrono::Utc::now());
+        storage::save_settings(&updated).map_err(|e| e.to_string())?;
+        settings.set(updated);
+        Ok(format!("Vault synced at revision {revision}"))
+    };
+
     let lock = move |_| {
         vault.set(None);
         master_password.set(None);
@@ -434,6 +471,21 @@ fn VaultScreen(
                         Err(error) => save_error.set(Some(format!("Backup failed: {error}"))),
                     },
                     if settings().primary_action_display == PrimaryActionDisplay::Icons { "📤" } else { "Backup" }
+                }
+                button {
+                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
+                    title: "Sync vault",
+                    aria_label: "Sync vault",
+                    onclick: move |_| match sync_now() {
+                        Ok(message) => copy_timer.send(ToastCommand::Show(ToastState {
+                            id: 0,
+                            label: message,
+                            duration_ms: 5000,
+                            remaining_ms: 5000,
+                        })),
+                        Err(error) => save_error.set(Some(format!("Sync failed: {error}"))),
+                    },
+                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "↻" } else { "Sync" }
                 }
                 button {
                     class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "lock-btn icon-button primary-action" } else { "lock-btn primary-action" },
@@ -828,6 +880,10 @@ fn SettingsDialog(
         Ok(()) => settings.set(updated),
         Err(error) => on_error.call(format!("Failed to save settings: {error}")),
     };
+    let last_sync = settings()
+        .last_sync_at
+        .map(|value| value.to_rfc3339())
+        .unwrap_or_else(|| "Never".into());
 
     rsx! {
         div { class: "modal-backdrop",
@@ -864,6 +920,11 @@ fn SettingsDialog(
                             class: if active_section() == "passwords" { "settings-nav-item active" } else { "settings-nav-item" },
                             onclick: move |_| active_section.set("passwords"),
                             "Passwords"
+                        }
+                        button {
+                            class: if active_section() == "sync" { "settings-nav-item active" } else { "settings-nav-item" },
+                            onclick: move |_| active_section.set("sync"),
+                            "Sync"
                         }
                     }
                     div { class: "settings-content",
@@ -1049,6 +1110,41 @@ fn SettingsDialog(
                         },
                         option { value: "auto", "Auto-generate directly" }
                         option { value: "full", "Open full password generator" }
+                    }
+                }
+                div { class: if active_section() == "sync" { "settings-section active" } else { "settings-section" },
+                    label { "Vault synchronization" }
+                    p { class: "settings-help", "Sync stays off until you enable it and choose a local folder." }
+                    div { class: "settings-section settings-toggle",
+                        div {
+                            label { "Enable sync" }
+                            p { class: "settings-help", "Only encrypted vault data is written to the sync folder." }
+                        }
+                        input {
+                            r#type: "checkbox",
+                            checked: settings().sync_enabled,
+                            onchange: move |event| {
+                                let mut updated = settings();
+                                updated.sync_enabled = event.value() == "true";
+                                save(updated);
+                            },
+                        }
+                    }
+                    label { "Local sync folder" }
+                    input {
+                        placeholder: "Folder path",
+                        value: settings().sync_folder.clone().unwrap_or_default(),
+                        oninput: move |event| {
+                            let mut updated = settings();
+                            let path = event.value().trim().to_string();
+                            updated.sync_folder = if path.is_empty() { None } else { Some(path) };
+                            save(updated);
+                        },
+                    }
+                    div { class: "sync-status",
+                        span { "Revision: {settings().sync_revision}" }
+                        span { "Device: {settings().sync_device_id}" }
+                        span { "Last sync: {last_sync}" }
                     }
                 }
                     }

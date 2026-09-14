@@ -3,7 +3,12 @@ use crate::model::{Vault, VaultEntry, VaultFolder};
 use crate::password_gen::{generate_password, PasswordOptions};
 use crate::{clipboard, storage};
 use dioxus::prelude::*;
-use jpass_core::{AppSettings, AppTheme};
+use futures_util::StreamExt;
+use jpass_core::{
+    AppSettings, AppTheme, EditPasswordGenerationMode, EntryActionDisplay, PrimaryActionDisplay,
+    ToastPosition,
+};
+use std::time::Instant;
 use uuid::Uuid;
 
 const MAIN_CSS: &str = include_str!("../assets/main.css");
@@ -21,6 +26,11 @@ struct ToastState {
     label: String,
     duration_ms: u64,
     remaining_ms: u64,
+}
+
+enum ToastCommand {
+    Show(ToastState),
+    Cancel,
 }
 
 #[allow(non_snake_case)]
@@ -207,37 +217,50 @@ fn VaultScreen(
     let mut show_editor = use_signal(|| false);
     let mut show_folder_modal = use_signal(|| false);
     let mut show_settings = use_signal(|| false);
+    let mut show_generator = use_signal(|| false);
+    let mut show_entry_generator = use_signal(|| false);
+    let mut generated_entry_password = use_signal::<Option<String>>(|| None);
+    let mut pending_delete = use_signal::<Option<VaultEntry>>(|| None);
+    let mut pending_move = use_signal::<Option<VaultEntry>>(|| None);
     let mut new_folder_name = use_signal(String::new);
     let mut save_error = use_signal::<Option<String>>(|| None);
     let mut notification = use_signal::<Option<ToastState>>(|| None);
-    let mut settings = use_signal(|| storage::load_settings().unwrap_or_default());
-    let clipboard_timeout = settings().clipboard_timeout_secs.max(1);
+    let settings = use_signal(|| storage::load_settings().unwrap_or_default());
 
-    let _copy_timer = use_future(move || {
-        let active = notification();
+    let copy_timer = use_coroutine(
+        move |mut commands: UnboundedReceiver<ToastCommand>| async move {
+            while let Some(command) = commands.next().await {
+                match command {
+                    ToastCommand::Cancel => notification.set(None),
+                    ToastCommand::Show(current) => {
+                        let total_ms = current.duration_ms.max(1);
+                        let started = Instant::now();
+                        notification.set(Some(ToastState {
+                            label: current.label.clone(),
+                            duration_ms: total_ms,
+                            remaining_ms: total_ms,
+                        }));
 
-        async move {
-            let Some(current) = active else {
-                return;
-            };
-
-            let total_ms = current.duration_ms.max(1);
-            let mut remaining = current.remaining_ms.max(1);
-
-            while remaining > 0 {
-                futures_timer::Delay::new(std::time::Duration::from_millis(50)).await;
-                remaining = remaining.saturating_sub(50);
-                notification.set(Some(ToastState {
-                    label: current.label.clone(),
-                    duration_ms: total_ms,
-                    remaining_ms: remaining.max(0),
-                }));
+                        loop {
+                            futures_timer::Delay::new(std::time::Duration::from_millis(50)).await;
+                            let elapsed_ms = started.elapsed().as_millis() as u64;
+                            let remaining = total_ms.saturating_sub(elapsed_ms);
+                            if remaining == 0 {
+                                notification.set(None);
+                                clipboard::clear_clipboard();
+                                break;
+                            }
+                            notification.set(Some(ToastState {
+                                label: current.label.clone(),
+                                duration_ms: total_ms,
+                                remaining_ms: remaining,
+                            }));
+                        }
+                    }
+                }
             }
-
-            notification.set(None);
-            clipboard::clear_clipboard();
-        }
-    });
+        },
+    );
 
     let persist = move |v: &Vault| -> Result<(), String> {
         let Some(pw) = master_password() else {
@@ -246,6 +269,80 @@ fn VaultScreen(
         let json = v.to_json().map_err(|e| e.to_string())?;
         let blob = crypto::encrypt(&json, &pw).map_err(|_| "encryption failed".to_string())?;
         storage::save_encrypted(&blob).map_err(|e| e.to_string())
+    };
+
+    let mut delete_entry = move |id: Uuid| {
+        if let Some(mut v) = vault() {
+            v.remove_entry(id);
+            match persist(&v) {
+                Ok(()) => {
+                    vault.set(Some(v));
+                    save_error.set(None);
+                }
+                Err(error) => save_error.set(Some(error)),
+            }
+        }
+    };
+
+    let mut move_entry =
+        move |(entry_id, folder_id, new_folder_name): (Uuid, Option<Uuid>, Option<String>)| {
+            if let Some(mut v) = vault() {
+                let target_folder = if let Some(name) = new_folder_name {
+                    match v.create_folder(&name) {
+                        Ok(folder) => Some(folder.id),
+                        Err(error) => {
+                            save_error.set(Some(error));
+                            return;
+                        }
+                    }
+                } else {
+                    folder_id
+                };
+
+                if v.move_entry_to_folder(entry_id, target_folder) {
+                    match persist(&v) {
+                        Ok(()) => {
+                            vault.set(Some(v));
+                            save_error.set(None);
+                        }
+                        Err(error) => save_error.set(Some(error)),
+                    }
+                }
+            }
+        };
+
+    let create_backup = move || -> Result<String, String> {
+        let Some(pw) = master_password() else {
+            return Err("Vault is locked.".into());
+        };
+        let Some(current_vault) = vault() else {
+            return Err("Vault is unavailable.".into());
+        };
+        let json = current_vault.to_json().map_err(|e| e.to_string())?;
+        let blob = crypto::encrypt(&json, &pw).map_err(|_| "encryption failed".to_string())?;
+        let path = storage::save_encrypted_backup(&blob).map_err(|e| e.to_string())?;
+        Ok(path.display().to_string())
+    };
+
+    let create_validated_backup = move || -> Result<String, String> {
+        let Some(pw) = master_password() else {
+            return Err("Vault is locked.".into());
+        };
+        let Some(current_vault) = vault() else {
+            return Err("Vault is unavailable.".into());
+        };
+        let json = current_vault.to_json().map_err(|e| e.to_string())?;
+        let blob = crypto::encrypt(&json, &pw).map_err(|_| "encryption failed".to_string())?;
+        let restored = crypto::decrypt(&blob, &pw).map_err(|_| {
+            "backup validation failed: encrypted data could not be decrypted".to_string()
+        })?;
+        let restored_vault = Vault::from_json(&restored)
+            .map_err(|_| "backup validation failed: vault data could not be parsed".to_string())?;
+        if restored_vault.to_json().map_err(|e| e.to_string())? != json {
+            return Err("backup validation failed: restored data does not match the vault".into());
+        }
+        let path = storage::save_encrypted_backup(&blob).map_err(|e| e.to_string())?;
+        Ok(path.display().to_string())
     };
 
     let lock = move |_| {
@@ -292,49 +389,61 @@ fn VaultScreen(
                     value: "{search}",
                     oninput: move |e| search.set(e.value()),
                 }
-                div { class: "clipboard-setting",
-                    label { "Keep clipboard for " }
-                    select {
-                        value: "{clipboard_timeout}",
-                        onchange: move |e| {
-                            if let Ok(value) = e.value().parse::<u64>() {
-                                let timeout = value.max(1);
-                                let mut updated = settings();
-                                updated.clipboard_timeout_secs = timeout;
-                                if let Err(err) = storage::save_settings(&updated) {
-                                    save_error.set(Some(format!("Failed to save clipboard setting: {err}")));
-                                } else {
-                                    settings.set(updated);
-                                    save_error.set(None);
-                                }
-                            }
-                        },
-                        option { value: "5", "5s" }
-                        option { value: "10", "10s" }
-                        option { value: "20", "20s" }
-                        option { value: "60", "60s" }
-                    }
-                }
                 button {
+                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "icon-button primary-action" } else { "primary-action" },
+                    title: "Add entry",
+                    aria_label: "Add entry",
                     onclick: move |_| {
                         editing.set(Some(VaultEntry::new(String::new(), String::new(), String::new(), String::new(), String::new())));
                         show_editor.set(true);
                     },
-                    "+ Add Entry"
+                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "+" } else { "+ Add Entry" }
                 }
                 button {
+                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "icon-button primary-action" } else { "primary-action" },
+                    title: "New folder",
+                    aria_label: "New folder",
                     onclick: move |_| {
                         new_folder_name.set(String::new());
                         show_folder_modal.set(true);
                     },
-                    "+ New Folder"
+                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "📁+" } else { "+ New Folder" }
                 }
                 button {
-                    class: "secondary-btn",
+                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
+                    title: "Settings",
+                    aria_label: "Settings",
                     onclick: move |_| show_settings.set(true),
-                    "Settings"
+                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "⚙" } else { "Settings" }
                 }
-                button { class: "lock-btn", onclick: lock, "Lock" }
+                button {
+                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
+                    title: "Password generator",
+                    aria_label: "Password generator",
+                    onclick: move |_| show_generator.set(true),
+                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "✦" } else { "Generator" }
+                }
+                button {
+                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
+                    title: "Create backup",
+                    aria_label: "Create backup",
+                    onclick: move |_| match create_backup() {
+                        Ok(path) => copy_timer.send(ToastCommand::Show(ToastState {
+                            label: format!("Backup saved to {path}"),
+                            duration_ms: 5000,
+                            remaining_ms: 5000,
+                        })),
+                        Err(error) => save_error.set(Some(format!("Backup failed: {error}"))),
+                    },
+                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "📤" } else { "Backup" }
+                }
+                button {
+                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "lock-btn icon-button primary-action" } else { "lock-btn primary-action" },
+                    title: "Lock vault",
+                    aria_label: "Lock vault",
+                    onclick: lock,
+                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "🔒" } else { "Lock" }
+                }
             }
 
             if let Some(msg) = save_error() {
@@ -342,16 +451,26 @@ fn VaultScreen(
             }
 
             if let Some(toast) = notification_snapshot {
-                div { class: "toast",
+                div { class: match settings().toast_position {
+                    ToastPosition::TopLeft => "toast toast-top-left",
+                    ToastPosition::TopCenter => "toast toast-top-center",
+                    ToastPosition::TopRight => "toast toast-top-right",
+                    ToastPosition::CenterLeft => "toast toast-center-left",
+                    ToastPosition::Center => "toast toast-center",
+                    ToastPosition::CenterRight => "toast toast-center-right",
+                    ToastPosition::BottomLeft => "toast toast-bottom-left",
+                    ToastPosition::BottomCenter => "toast toast-bottom-center",
+                    ToastPosition::BottomRight => "toast toast-bottom-right",
+                },
                     div { class: "toast-content",
-                        span { "{toast.label} copied" }
+                        span { "{toast.label}" }
                         div { class: "toast-timer-bar",
                             div { class: "toast-timer-fill", style: "width: {toast_progress.unwrap_or(0.0)}%" }
                         }
                     }
                     button {
                         class: "toast-close",
-                        onclick: move |_| notification.set(None),
+                        onclick: move |_| copy_timer.send(ToastCommand::Cancel),
                         "×"
                     }
                 }
@@ -386,72 +505,56 @@ fn VaultScreen(
                                     span { class: "entry-username", "{entry.username}" }
                                 }
                                 div { class: "entry-actions",
-                                    select {
-                                        value: match entry.folder_id { Some(id) => id.to_string(), None => String::new() },
-                                        onchange: {
-                                            let entry_id = entry.id;
-                                            move |e| {
-                                                let folder_value = e.value();
-                                                let target = if folder_value.trim().is_empty() {
-                                                    None
-                                                } else {
-                                                    Uuid::parse_str(&folder_value).ok()
-                                                };
-
-                                                if let Some(mut v) = vault() {
-                                                    let changed = v.move_entry_to_folder(entry_id, target);
-                                                    if changed {
-                                                        match persist(&v) {
-                                                            Ok(()) => {
-                                                                vault.set(Some(v));
-                                                                save_error.set(None);
-                                                            }
-                                                            Err(err) => save_error.set(Some(err)),
-                                                        }
-                                                    }
-                                                }
-                                            }
+                                    button {
+                                        class: if settings().entry_action_display == EntryActionDisplay::Icons { "icon-button" } else { "" },
+                                        title: "Move entry",
+                                        aria_label: "Move entry",
+                                        onclick: {
+                                            let entry = entry.clone();
+                                            move |_| pending_move.set(Some(entry.clone()))
                                         },
-                                        option { value: "", "Unfiled" }
-                                        for folder in folders_for_select.clone() {
-                                            option {
-                                                value: "{folder.id}",
-                                                selected: entry.folder_id == Some(folder.id),
-                                                "{folder.name}"
-                                            }
-                                        }
+                                        if settings().entry_action_display == EntryActionDisplay::Icons { "⇄" } else { "Move" }
                                     }
                                     button {
+                                        class: if settings().entry_action_display == EntryActionDisplay::Icons { "icon-button" } else { "" },
+                                        title: "Copy username",
+                                        aria_label: "Copy username",
                                         onclick: {
                                             let username = entry.username.clone();
                                             let timeout = settings().clipboard_timeout_secs.max(1);
                                             move |_| {
                                                 clipboard::copy_to_clipboard(&username);
-                                                notification.set(Some(ToastState {
-                                                    label: "Username".into(),
+                                                copy_timer.send(ToastCommand::Show(ToastState {
+                                                    label: "Username copied".into(),
                                                     duration_ms: timeout.saturating_mul(1000),
                                                     remaining_ms: timeout.saturating_mul(1000),
                                                 }));
                                             }
                                         },
-                                        "Copy user"
+                                        if settings().entry_action_display == EntryActionDisplay::Icons { "👤" } else { "Copy user" }
                                     }
                                     button {
+                                        class: if settings().entry_action_display == EntryActionDisplay::Icons { "icon-button" } else { "" },
+                                        title: "Copy password",
+                                        aria_label: "Copy password",
                                         onclick: {
                                             let password = entry.password.clone();
                                             let timeout = settings().clipboard_timeout_secs.max(1);
                                             move |_| {
                                                 clipboard::copy_to_clipboard(&password);
-                                                notification.set(Some(ToastState {
-                                                    label: "Password".into(),
+                                                copy_timer.send(ToastCommand::Show(ToastState {
+                                                    label: "Password copied".into(),
                                                     duration_ms: timeout.saturating_mul(1000),
                                                     remaining_ms: timeout.saturating_mul(1000),
                                                 }));
                                             }
                                         },
-                                        "Copy pass"
+                                        if settings().entry_action_display == EntryActionDisplay::Icons { "⚿" } else { "Copy pass" }
                                     }
                                     button {
+                                        class: if settings().entry_action_display == EntryActionDisplay::Icons { "icon-button" } else { "" },
+                                        title: "Edit entry",
+                                        aria_label: "Edit entry",
                                         onclick: {
                                             let entry = entry.clone();
                                             move |_| {
@@ -459,23 +562,23 @@ fn VaultScreen(
                                                 show_editor.set(true);
                                             }
                                         },
-                                        "Edit"
+                                        if settings().entry_action_display == EntryActionDisplay::Icons { "✎" } else { "Edit" }
                                     }
                                     button {
-                                        class: "danger",
+                                        class: if settings().entry_action_display == EntryActionDisplay::Icons { "danger icon-button" } else { "danger" },
+                                        title: "Delete entry",
+                                        aria_label: "Delete entry",
                                         onclick: {
-                                            let id = entry.id;
+                                            let entry = entry.clone();
                                             move |_| {
-                                                if let Some(mut v) = vault() {
-                                                    v.remove_entry(id);
-                                                    match persist(&v) {
-                                                        Ok(()) => { vault.set(Some(v)); save_error.set(None); }
-                                                        Err(e) => save_error.set(Some(e)),
-                                                    }
+                                                if settings().confirm_delete {
+                                                    pending_delete.set(Some(entry.clone()));
+                                                } else {
+                                                    delete_entry(entry.id);
                                                 }
                                             }
                                         },
-                                        "Delete"
+                                        if settings().entry_action_display == EntryActionDisplay::Icons { "⌫" } else { "Delete" }
                                     }
                                 }
                             }
@@ -488,9 +591,22 @@ fn VaultScreen(
                 if let Some(entry) = editing() {
                     EntryEditor {
                         entry,
+                        settings,
+                        generated_password: generated_entry_password,
+                        on_open_generator: move |_| show_entry_generator.set(true),
+                        folders: folders_for_select.clone(),
                         on_cancel: move |_| show_editor.set(false),
-                        on_save: move |updated: VaultEntry| {
+                        on_save: move |(mut updated, new_folder_name): (VaultEntry, Option<String>)| {
                             if let Some(mut v) = vault() {
+                                if let Some(name) = new_folder_name {
+                                    match v.create_folder(&name) {
+                                        Ok(folder) => updated.folder_id = Some(folder.id),
+                                        Err(error) => {
+                                            save_error.set(Some(error));
+                                            return;
+                                        }
+                                    }
+                                }
                                 if v.entries.iter().any(|e| e.id == updated.id) {
                                     v.update_entry(updated);
                                 } else {
@@ -579,6 +695,111 @@ fn VaultScreen(
                     on_error: move |message: String| save_error.set(Some(message)),
                 }
             }
+
+            if show_generator() {
+                PasswordGeneratorDialog {
+                    settings,
+                    on_close: move |_| show_generator.set(false),
+                    on_copy: move |password: String| {
+                        let timeout = settings().clipboard_timeout_secs.max(1);
+                        clipboard::copy_to_clipboard(&password);
+                        copy_timer.send(ToastCommand::Show(ToastState {
+                            label: "Generated password copied".into(),
+                            duration_ms: timeout.saturating_mul(1000),
+                            remaining_ms: timeout.saturating_mul(1000),
+                        }));
+                    },
+                    on_use: move |password: String| {
+                        let timeout = settings().clipboard_timeout_secs.max(1);
+                        clipboard::copy_to_clipboard(&password);
+                        copy_timer.send(ToastCommand::Show(ToastState {
+                            label: "Generated password copied".into(),
+                            duration_ms: timeout.saturating_mul(1000),
+                            remaining_ms: timeout.saturating_mul(1000),
+                        }));
+                        show_generator.set(false);
+                    },
+                }
+            }
+
+            if show_entry_generator() {
+                PasswordGeneratorDialog {
+                    settings,
+                    on_close: move |_| show_entry_generator.set(false),
+                    on_copy: move |password: String| {
+                        let timeout = settings().clipboard_timeout_secs.max(1);
+                        clipboard::copy_to_clipboard(&password);
+                        copy_timer.send(ToastCommand::Show(ToastState {
+                            label: "Generated password copied".into(),
+                            duration_ms: timeout.saturating_mul(1000),
+                            remaining_ms: timeout.saturating_mul(1000),
+                        }));
+                    },
+                    on_use: move |password: String| {
+                        generated_entry_password.set(Some(password));
+                        show_entry_generator.set(false);
+                    },
+                }
+            }
+
+            if let Some(entry) = pending_delete() {
+                div { class: "modal-backdrop",
+                    div { class: "modal confirmation-modal",
+                        span { class: "eyebrow danger-eyebrow", "DESTRUCTIVE ACTION" }
+                        h2 { "Delete entry?" }
+                        p { "This will permanently remove ", strong { "{entry.title}" }, " from your vault." }
+                        div { class: "modal-actions",
+                            button {
+                                class: "secondary-btn",
+                                onclick: move |_| pending_delete.set(None),
+                                "Cancel"
+                            }
+                            button {
+                                class: "secondary-btn",
+                                onclick: {
+                                    let id = entry.id;
+                                    move |_| {
+                                        delete_entry(id);
+                                        pending_delete.set(None);
+                                    }
+                                },
+                                "Delete without backup"
+                            }
+                            button {
+                                class: "primary",
+                                onclick: {
+                                    let id = entry.id;
+                                    move |_| match create_validated_backup() {
+                                        Ok(path) => {
+                                            delete_entry(id);
+                                            pending_delete.set(None);
+                                            copy_timer.send(ToastCommand::Show(ToastState {
+                                                label: format!("Backup validated, then entry deleted: {path}"),
+                                                duration_ms: 5000,
+                                                remaining_ms: 5000,
+                                            }));
+                                        }
+                                        Err(error) => save_error.set(Some(format!("Backup failed; entry was not deleted: {error}"))),
+                                    }
+                                },
+                                "Backup & Delete"
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(entry) = pending_move() {
+                MoveEntryDialog {
+                    entry,
+                    folders: folders_for_select.clone(),
+                    on_cancel: move |_| pending_move.set(None),
+                    on_move: move |selection: (Uuid, Option<Uuid>, Option<String>)| {
+                        move_entry(selection);
+                        pending_move.set(None);
+                    },
+                }
+            }
         }
     }
 }
@@ -633,6 +854,63 @@ fn SettingsDialog(
                         option { value: "system", "Use system preference" }
                     }
                 }
+                div { class: "settings-section settings-toggle",
+                    div {
+                        label { "Confirm before deleting" }
+                        p { class: "settings-help", "Ask for confirmation before permanently removing an entry." }
+                    }
+                    input {
+                        r#type: "checkbox",
+                        checked: settings().confirm_delete,
+                        onchange: move |event| {
+                            let mut updated = settings();
+                            updated.confirm_delete = event.value() == "true";
+                            save(updated);
+                        },
+                    }
+                }
+                div { class: "settings-section",
+                    label { "Entry actions" }
+                    p { class: "settings-help", "Choose descriptive buttons or compact icons in each entry row." }
+                    select {
+                        value: match settings().entry_action_display {
+                            EntryActionDisplay::Text => "text",
+                            EntryActionDisplay::Icons => "icons",
+                        },
+                        onchange: move |event| {
+                            let mut updated = settings();
+                            updated.entry_action_display = if event.value() == "icons" {
+                                EntryActionDisplay::Icons
+                            } else {
+                                EntryActionDisplay::Text
+                            };
+                            save(updated);
+                        },
+                        option { value: "text", "Text buttons" }
+                        option { value: "icons", "Compact icons" }
+                    }
+                }
+                div { class: "settings-section",
+                    label { "Primary actions" }
+                    p { class: "settings-help", "Choose descriptive buttons or compact icons for the main toolbar actions." }
+                    select {
+                        value: match settings().primary_action_display {
+                            PrimaryActionDisplay::Text => "text",
+                            PrimaryActionDisplay::Icons => "icons",
+                        },
+                        onchange: move |event| {
+                            let mut updated = settings();
+                            updated.primary_action_display = if event.value() == "icons" {
+                                PrimaryActionDisplay::Icons
+                            } else {
+                                PrimaryActionDisplay::Text
+                            };
+                            save(updated);
+                        },
+                        option { value: "text", "Text buttons" }
+                        option { value: "icons", "Compact icons" }
+                    }
+                }
                 div { class: "settings-section",
                     label { "Clipboard timeout" }
                     p { class: "settings-help", "Copied credentials are cleared automatically after this time." }
@@ -651,6 +929,92 @@ fn SettingsDialog(
                         option { value: "60", "60 seconds" }
                     }
                 }
+                div { class: "settings-section",
+                    label { "Toast position" }
+                    p { class: "settings-help", "Choose where copy and backup notifications appear." }
+                    select {
+                        value: match settings().toast_position {
+                            ToastPosition::TopLeft => "top-left",
+                            ToastPosition::TopCenter => "top-center",
+                            ToastPosition::TopRight => "top-right",
+                            ToastPosition::CenterLeft => "center-left",
+                            ToastPosition::Center => "center",
+                            ToastPosition::CenterRight => "center-right",
+                            ToastPosition::BottomLeft => "bottom-left",
+                            ToastPosition::BottomCenter => "bottom-center",
+                            ToastPosition::BottomRight => "bottom-right",
+                        },
+                        onchange: move |event| {
+                            let mut updated = settings();
+                            updated.toast_position = match event.value().as_str() {
+                                "top-left" => ToastPosition::TopLeft,
+                                "top-center" => ToastPosition::TopCenter,
+                                "top-right" => ToastPosition::TopRight,
+                                "center-left" => ToastPosition::CenterLeft,
+                                "center" => ToastPosition::Center,
+                                "center-right" => ToastPosition::CenterRight,
+                                "bottom-left" => ToastPosition::BottomLeft,
+                                "bottom-center" => ToastPosition::BottomCenter,
+                                _ => ToastPosition::BottomRight,
+                            };
+                            save(updated);
+                        },
+                        option { value: "top-left", "Top left" }
+                        option { value: "top-center", "Top center" }
+                        option { value: "top-right", "Top right" }
+                        option { value: "center-left", "Center left" }
+                        option { value: "center", "Center" }
+                        option { value: "center-right", "Center right" }
+                        option { value: "bottom-left", "Bottom left" }
+                        option { value: "bottom-center", "Bottom center" }
+                        option { value: "bottom-right", "Bottom right" }
+                    }
+                }
+                div { class: "settings-section",
+                    label { "Password generator defaults" }
+                    p { class: "settings-help", "These defaults apply to the standalone generator and Edit Entry." }
+                    label { "Default length" }
+                    input {
+                        r#type: "number",
+                        min: "4",
+                        max: "128",
+                        value: "{settings().generator_length}",
+                        onchange: move |event| {
+                            if let Ok(length) = event.value().parse::<usize>() {
+                                let mut updated = settings();
+                                updated.generator_length = length.clamp(4, 128);
+                                save(updated);
+                            }
+                        },
+                    }
+                    div { class: "generator-options",
+                        label { input { r#type: "checkbox", checked: settings().generator_lowercase, onchange: move |event| { let mut updated = settings(); updated.generator_lowercase = event.value() == "true"; save(updated); } } " Lowercase" }
+                        label { input { r#type: "checkbox", checked: settings().generator_uppercase, onchange: move |event| { let mut updated = settings(); updated.generator_uppercase = event.value() == "true"; save(updated); } } " Uppercase" }
+                        label { input { r#type: "checkbox", checked: settings().generator_digits, onchange: move |event| { let mut updated = settings(); updated.generator_digits = event.value() == "true"; save(updated); } } " Numbers" }
+                        label { input { r#type: "checkbox", checked: settings().generator_symbols, onchange: move |event| { let mut updated = settings(); updated.generator_symbols = event.value() == "true"; save(updated); } } " Special characters" }
+                    }
+                }
+                div { class: "settings-section",
+                    label { "Edit Entry password generation" }
+                    p { class: "settings-help", "Choose direct generation or open the full generator when editing an entry." }
+                    select {
+                        value: match settings().edit_password_generation_mode {
+                            EditPasswordGenerationMode::AutoGenerate => "auto",
+                            EditPasswordGenerationMode::FullGenerator => "full",
+                        },
+                        onchange: move |event| {
+                            let mut updated = settings();
+                            updated.edit_password_generation_mode = if event.value() == "full" {
+                                EditPasswordGenerationMode::FullGenerator
+                            } else {
+                                EditPasswordGenerationMode::AutoGenerate
+                            };
+                            save(updated);
+                        },
+                        option { value: "auto", "Auto-generate directly" }
+                        option { value: "full", "Open full password generator" }
+                    }
+                }
                 div { class: "modal-actions",
                     button { class: "primary", onclick: move |_| on_close.call(()), "Done" }
                 }
@@ -660,10 +1024,152 @@ fn SettingsDialog(
 }
 
 #[component]
+fn PasswordGeneratorDialog(
+    settings: Signal<AppSettings>,
+    on_close: EventHandler<()>,
+    on_copy: EventHandler<String>,
+    on_use: EventHandler<String>,
+) -> Element {
+    let mut length = use_signal(|| settings().generator_length.to_string());
+    let mut lowercase = use_signal(|| settings().generator_lowercase);
+    let mut uppercase = use_signal(|| settings().generator_uppercase);
+    let mut digits = use_signal(|| settings().generator_digits);
+    let mut symbols = use_signal(|| settings().generator_symbols);
+    let mut generated = use_signal(|| {
+        generate_password(PasswordOptions {
+            length: settings().generator_length,
+            lowercase: settings().generator_lowercase,
+            uppercase: settings().generator_uppercase,
+            digits: settings().generator_digits,
+            symbols: settings().generator_symbols,
+        })
+    });
+
+    let mut generate = move || {
+        let length = length().parse::<usize>().unwrap_or(20).clamp(4, 128);
+        generated.set(generate_password(PasswordOptions {
+            length,
+            lowercase: lowercase(),
+            uppercase: uppercase(),
+            digits: digits(),
+            symbols: symbols(),
+        }));
+    };
+
+    rsx! {
+        div { class: "modal-backdrop",
+            div { class: "modal generator-modal",
+                div { class: "settings-heading",
+                    div {
+                        span { class: "eyebrow", "UTILITY" }
+                        h2 { "Password generator" }
+                    }
+                    button { class: "modal-close", onclick: move |_| on_close.call(()), "×" }
+                }
+                label { "Password length" }
+                input {
+                    r#type: "number",
+                    min: "4",
+                    max: "128",
+                    value: "{length}",
+                    oninput: move |event| length.set(event.value()),
+                }
+                div { class: "generator-options",
+                    label { input { r#type: "checkbox", checked: lowercase(), onchange: move |event| lowercase.set(event.value() == "true") } " Lowercase" }
+                    label { input { r#type: "checkbox", checked: uppercase(), onchange: move |event| uppercase.set(event.value() == "true") } " Uppercase" }
+                    label { input { r#type: "checkbox", checked: digits(), onchange: move |event| digits.set(event.value() == "true") } " Numbers" }
+                    label { input { r#type: "checkbox", checked: symbols(), onchange: move |event| symbols.set(event.value() == "true") } " Special characters" }
+                }
+                div { class: "generated-password", aria_label: "Generated password", "{generated}" }
+                div { class: "modal-actions",
+                    button { class: "secondary-btn", onclick: move |_| generate(), "Generate" }
+                    button { class: "primary", onclick: move |_| on_copy.call(generated()), "Copy" }
+                    button { class: "primary", onclick: move |_| on_use.call(generated()), "Use password" }
+                    button { class: "primary", onclick: move |_| on_close.call(()), "Done" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn MoveEntryDialog(
+    entry: VaultEntry,
+    folders: Vec<VaultFolder>,
+    on_cancel: EventHandler<()>,
+    on_move: EventHandler<(Uuid, Option<Uuid>, Option<String>)>,
+) -> Element {
+    let mut folder_id = use_signal(|| entry.folder_id.map(|id| id.to_string()).unwrap_or_default());
+    let mut new_folder_name = use_signal(String::new);
+    let mut show_new_folder = use_signal(|| false);
+
+    rsx! {
+        div { class: "modal-backdrop",
+            div { class: "modal move-modal",
+                span { class: "eyebrow", "ORGANIZE ENTRY" }
+                h2 { "Move entry" }
+                p { class: "settings-help", "Choose a destination for ", strong { "{entry.title}" }, "." }
+                label { "Folder" }
+                div { class: "folder-select-row",
+                    select {
+                        value: "{folder_id}",
+                        onchange: move |event| folder_id.set(event.value()),
+                        option { value: "", "Unfiled" }
+                        for folder in folders {
+                            option { value: "{folder.id}", "{folder.name}" }
+                        }
+                    }
+                    button {
+                        class: "icon-button folder-create-button",
+                        title: "Create folder",
+                        aria_label: "Create folder",
+                        onclick: move |_| show_new_folder.set(!show_new_folder()),
+                        "📁+"
+                    }
+                }
+                if show_new_folder() {
+                    input {
+                        placeholder: "New folder name",
+                        value: "{new_folder_name}",
+                        oninput: move |event| new_folder_name.set(event.value()),
+                    }
+                }
+                div { class: "modal-actions",
+                    button {
+                        class: "secondary-btn",
+                        onclick: move |_| on_cancel.call(()),
+                        "Cancel"
+                    }
+                    button {
+                        class: "primary",
+                        onclick: {
+                            let entry_id = entry.id;
+                            move |_| {
+                                let name = new_folder_name().trim().to_string();
+                                on_move.call((
+                                    entry_id,
+                                    Uuid::parse_str(&folder_id()).ok(),
+                                    if name.is_empty() { None } else { Some(name) },
+                                ));
+                            }
+                        },
+                        "Move entry"
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
 fn EntryEditor(
     entry: VaultEntry,
-    on_save: EventHandler<VaultEntry>,
+    settings: Signal<AppSettings>,
+    generated_password: Signal<Option<String>>,
+    folders: Vec<VaultFolder>,
+    on_save: EventHandler<(VaultEntry, Option<String>)>,
     on_cancel: EventHandler<()>,
+    on_open_generator: EventHandler<()>,
 ) -> Element {
     let mut title = use_signal(|| entry.title.clone());
     let mut username = use_signal(|| entry.username.clone());
@@ -671,9 +1177,19 @@ fn EntryEditor(
     let mut url = use_signal(|| entry.url.clone());
     let mut notes = use_signal(|| entry.notes.clone());
     let mut reveal = use_signal(|| false);
+    let mut folder_id = use_signal(|| entry.folder_id.map(|id| id.to_string()).unwrap_or_default());
+    let mut new_folder_name = use_signal(String::new);
+    let mut show_new_folder = use_signal(|| false);
 
     let entry_id = entry.id;
     let created_at = entry.created_at;
+
+    use_effect(move || {
+        if let Some(value) = generated_password() {
+            password.set(value);
+            generated_password.set(None);
+        }
+    });
 
     rsx! {
         div { class: "modal-backdrop",
@@ -692,7 +1208,19 @@ fn EntryEditor(
                     }
                     button { onclick: move |_| reveal.set(!reveal()), if reveal() { "Hide" } else { "Show" } }
                     button {
-                        onclick: move |_| password.set(generate_password(PasswordOptions::default())),
+                        onclick: move |_| {
+                            if settings().edit_password_generation_mode == EditPasswordGenerationMode::FullGenerator {
+                                on_open_generator.call(());
+                            } else {
+                                password.set(generate_password(PasswordOptions {
+                                    length: settings().generator_length.clamp(4, 128),
+                                    lowercase: settings().generator_lowercase,
+                                    uppercase: settings().generator_uppercase,
+                                    digits: settings().generator_digits,
+                                    symbols: settings().generator_symbols,
+                                }));
+                            }
+                        },
                         "Generate"
                     }
                 }
@@ -700,23 +1228,50 @@ fn EntryEditor(
                 input { value: "{url}", oninput: move |e| url.set(e.value()) }
                 label { "Notes" }
                 textarea { value: "{notes}", oninput: move |e| notes.set(e.value()) }
+                label { "Folder" }
+                div { class: "folder-select-row",
+                    select {
+                        value: "{folder_id}",
+                        onchange: move |e| folder_id.set(e.value()),
+                        option { value: "", "Unfiled" }
+                        for folder in folders {
+                            option { value: "{folder.id}", "{folder.name}" }
+                        }
+                    }
+                    button {
+                        class: "icon-button folder-create-button",
+                        title: "Create folder",
+                        aria_label: "Create folder",
+                        onclick: move |_| show_new_folder.set(!show_new_folder()),
+                        "📁+"
+                    }
+                }
+                if show_new_folder() {
+                    input {
+                        placeholder: "New folder name",
+                        value: "{new_folder_name}",
+                        oninput: move |e| new_folder_name.set(e.value()),
+                    }
+                }
 
                 div { class: "modal-actions",
                     button { onclick: move |_| on_cancel.call(()), "Cancel" }
                     button {
                         class: "primary",
                         onclick: move |_| {
-                            on_save.call(VaultEntry {
+                            let selected_folder = Uuid::parse_str(&folder_id()).ok();
+                            let new_folder = new_folder_name().trim().to_string();
+                            on_save.call((VaultEntry {
                                 id: entry_id,
                                 title: title(),
                                 username: username(),
                                 password: password(),
                                 url: url(),
                                 notes: notes(),
-                                folder_id: entry.folder_id,
+                                folder_id: selected_folder,
                                 created_at,
                                 updated_at: chrono::Utc::now(),
-                            });
+                            }, if new_folder.is_empty() { None } else { Some(new_folder) }));
                         },
                         "Save"
                     }

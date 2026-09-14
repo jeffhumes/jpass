@@ -15,11 +15,98 @@ impl Default for AppTheme {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EntryActionDisplay {
+    Text,
+    Icons,
+}
+
+impl Default for EntryActionDisplay {
+    fn default() -> Self {
+        Self::Text
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PrimaryActionDisplay {
+    Text,
+    Icons,
+}
+
+impl Default for PrimaryActionDisplay {
+    fn default() -> Self {
+        Self::Text
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToastPosition {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    CenterLeft,
+    Center,
+    CenterRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+}
+
+impl Default for ToastPosition {
+    fn default() -> Self {
+        Self::BottomRight
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EditPasswordGenerationMode {
+    AutoGenerate,
+    FullGenerator,
+}
+
+impl Default for EditPasswordGenerationMode {
+    fn default() -> Self {
+        Self::AutoGenerate
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub clipboard_timeout_secs: u64,
     #[serde(default)]
     pub theme: AppTheme,
+    #[serde(default = "default_confirm_delete")]
+    pub confirm_delete: bool,
+    #[serde(default)]
+    pub entry_action_display: EntryActionDisplay,
+    #[serde(default)]
+    pub primary_action_display: PrimaryActionDisplay,
+    #[serde(default)]
+    pub toast_position: ToastPosition,
+    #[serde(default = "default_generator_length")]
+    pub generator_length: usize,
+    #[serde(default = "default_true")]
+    pub generator_lowercase: bool,
+    #[serde(default = "default_true")]
+    pub generator_uppercase: bool,
+    #[serde(default = "default_true")]
+    pub generator_digits: bool,
+    #[serde(default = "default_true")]
+    pub generator_symbols: bool,
+    #[serde(default)]
+    pub edit_password_generation_mode: EditPasswordGenerationMode,
+}
+
+fn default_confirm_delete() -> bool {
+    true
+}
+
+fn default_generator_length() -> usize {
+    20
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -27,6 +114,16 @@ impl Default for AppSettings {
         Self {
             clipboard_timeout_secs: Self::default_timeout(),
             theme: AppTheme::default(),
+            confirm_delete: true,
+            entry_action_display: EntryActionDisplay::default(),
+            primary_action_display: PrimaryActionDisplay::default(),
+            toast_position: ToastPosition::default(),
+            generator_length: default_generator_length(),
+            generator_lowercase: true,
+            generator_uppercase: true,
+            generator_digits: true,
+            generator_symbols: true,
+            edit_password_generation_mode: EditPasswordGenerationMode::default(),
         }
     }
 }

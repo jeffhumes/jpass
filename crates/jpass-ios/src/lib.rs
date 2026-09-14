@@ -1,5 +1,5 @@
 use jpass_core::{AppSettings, EncryptedBlob};
-use jpass_platform::{ClipboardService, PlatformError, PlatformPaths, VaultStore};
+use jpass_platform::{BackupService, ClipboardService, PlatformError, PlatformPaths, VaultStore};
 use std::path::PathBuf;
 
 pub struct IosStore;
@@ -40,6 +40,16 @@ impl ClipboardService for IosStore {
     fn clear(&self) -> Result<(), Self::Error> {
         Err(PlatformError::Clipboard(
             "iOS clipboard clear requires the iOS runtime binding".to_string(),
+        ))
+    }
+}
+
+impl BackupService for IosStore {
+    type Error = PlatformError;
+
+    fn save_encrypted_backup(&self, _blob: &EncryptedBlob) -> Result<PathBuf, Self::Error> {
+        Err(PlatformError::Storage(
+            "iOS backup destination requires the native document picker binding".to_string(),
         ))
     }
 }

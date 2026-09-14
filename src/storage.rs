@@ -5,6 +5,7 @@
 
 use crate::platform::{PlatformAdapter, PlatformAdapterTrait};
 pub use jpass_core::{AppSettings, EncryptedBlob};
+use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -37,5 +38,12 @@ pub fn save_encrypted(blob: &EncryptedBlob) -> Result<(), StorageError> {
     let adapter = PlatformAdapter::current();
     adapter
         .save_vault(blob)
+        .map_err(|e| StorageError::Backend(e.to_string()))
+}
+
+pub fn save_encrypted_backup(blob: &EncryptedBlob) -> Result<PathBuf, StorageError> {
+    let adapter = PlatformAdapter::current();
+    adapter
+        .save_encrypted_backup(blob)
         .map_err(|e| StorageError::Backend(e.to_string()))
 }

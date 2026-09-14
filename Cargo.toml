@@ -30,7 +30,7 @@ futures-util = "0.3"
 zeroize = "1"
 jpass-core = { path = "crates/jpass-core" }
 jpass-platform = { path = "crates/jpass-platform" }
-jpass-desktop = { path = "crates/jpass-desktop" }
+jpass-desktop = { path = "crates/jpass-desktop", optional = true }
 jpass-android = { path = "crates/jpass-android" }
 jpass-ios = { path = "crates/jpass-ios" }
 
@@ -51,7 +51,8 @@ uuid = { version = "1", features = ["js"] }
 
 [features]
 default = ["desktop"]
-desktop = ["dioxus/desktop", "dep:rusqlite", "dep:directories", "dep:arboard"]
+desktop = ["dioxus/desktop", "dep:jpass-desktop", "dep:rusqlite", "dep:directories", "dep:arboard"]
+mobile = ["dioxus/mobile"]
 web = ["dioxus/web", "dep:gloo-storage", "dep:wasm-bindgen-futures", "dep:web-sys", "dep:getrandom", "dep:getrandom02"]
 
 [profile.release]

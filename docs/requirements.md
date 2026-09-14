@@ -79,6 +79,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 
 ## User Experience
 
+- [x] Separate the Settings dialog into readable sections with a clickable navigation menu on the left.
 - [x] Prompt users for explicit confirmation before deleting a vault entry by default.
 - [x] Require the delete confirmation dialog to offer a validated encrypted vault backup before deletion, while allowing an explicit delete-without-backup choice.
 - [x] Provide a settings option to enable or disable the delete-confirmation prompt.
@@ -93,6 +94,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 - [x] Keep Clipboard control honors the selected display theme with matching wrapper, label, select, focus, border, and surface styling.
 - [x] Remove the Keep Clipboard timeout dropdown from the main screen and place it in the Settings dialog.
 - [x] Copy username/password toast notifications show a working countdown and automatically clear the clipboard when the timer expires.
+- [x] Toast notifications are stackable so rapid actions such as Copy User followed by Copy Password display simultaneously with independent countdowns.
 - [x] Allow users to choose the toast-notification position in Settings: any display corner, top-center, center, or bottom-center.
 - Deferred Linux issue: investigate why the GTK/WebKit desktop build may render but not accept clicks in the master-password field or buttons. Current startup workarounds disable WebKit DMA-BUF/compositing, use software GL, and disable Dioxus debug always-on-top; a native Linux renderer or deeper GTK/WebKit investigation may be needed.
 

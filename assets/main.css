@@ -422,10 +422,17 @@ label {
   font-weight: 600;
 }
 
-.toast {
+.toast-stack {
   position: fixed;
-  right: 1.5rem;
-  bottom: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  display: flex;
+  gap: 0.65rem;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.toast {
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -435,9 +442,9 @@ label {
   border-radius: 10px;
   padding: 0.75rem 0.9rem;
   box-shadow: var(--shadow);
-  z-index: 20;
   min-width: 220px;
   animation: toast-in 0.22s ease-out both;
+  pointer-events: auto;
 }
 
 .toast-top-left,
@@ -460,6 +467,13 @@ label {
 .toast-top-left {
   left: 1.5rem;
   right: auto;
+}
+
+.toast-bottom-left,
+.toast-bottom-center,
+.toast-bottom-right {
+  bottom: 1.5rem;
+  top: auto;
 }
 
 .toast-top-center,
@@ -548,6 +562,52 @@ label {
 
 .settings-modal {
   width: min(520px, 100%);
+}
+
+.settings-modal {
+  width: min(760px, 100%);
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 1.25rem;
+  min-height: 360px;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding-right: 0.75rem;
+  border-right: 1px solid var(--border);
+}
+
+.settings-nav-item {
+  min-height: 38px;
+  padding: 0.55rem 0.7rem;
+  text-align: left;
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.settings-nav-item:hover,
+.settings-nav-item.active {
+  background: var(--action-hover);
+  border-color: var(--action-hover-border);
+  color: #f4fffc;
+}
+
+.settings-content {
+  min-width: 0;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+.settings-content .settings-section:not(.active) {
+  display: none;
 }
 
 .settings-heading {
@@ -773,6 +833,20 @@ label {
   .entry-actions {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .settings-layout {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .settings-nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding-right: 0;
+    padding-bottom: 0.75rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
   }
 }
 

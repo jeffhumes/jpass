@@ -3,12 +3,10 @@ use crate::model::{Vault, VaultEntry, VaultFolder};
 use crate::password_gen::{generate_password, PasswordOptions};
 use crate::{clipboard, storage};
 use dioxus::prelude::*;
-use futures_util::StreamExt;
 use jpass_core::{
     AppSettings, AppTheme, EditPasswordGenerationMode, EntryActionDisplay, PrimaryActionDisplay,
     ToastPosition,
 };
-use std::time::Instant;
 use uuid::Uuid;
 
 const MAIN_CSS: &str = include_str!("../assets/main.css");
@@ -23,6 +21,7 @@ enum Screen {
 
 #[derive(Clone, Debug)]
 struct ToastState {
+    id: u64,
     label: String,
     duration_ms: u64,
     remaining_ms: u64,
@@ -30,7 +29,7 @@ struct ToastState {
 
 enum ToastCommand {
     Show(ToastState),
-    Cancel,
+    Cancel(u64),
 }
 
 #[allow(non_snake_case)]
@@ -224,40 +223,45 @@ fn VaultScreen(
     let mut pending_move = use_signal::<Option<VaultEntry>>(|| None);
     let mut new_folder_name = use_signal(String::new);
     let mut save_error = use_signal::<Option<String>>(|| None);
-    let mut notification = use_signal::<Option<ToastState>>(|| None);
+    let mut notification = use_signal::<Vec<ToastState>>(Vec::new);
     let settings = use_signal(|| storage::load_settings().unwrap_or_default());
 
     let copy_timer = use_coroutine(
         move |mut commands: UnboundedReceiver<ToastCommand>| async move {
-            while let Some(command) = commands.next().await {
-                match command {
-                    ToastCommand::Cancel => notification.set(None),
-                    ToastCommand::Show(current) => {
-                        let total_ms = current.duration_ms.max(1);
-                        let started = Instant::now();
-                        notification.set(Some(ToastState {
-                            label: current.label.clone(),
-                            duration_ms: total_ms,
-                            remaining_ms: total_ms,
-                        }));
-
-                        loop {
-                            futures_timer::Delay::new(std::time::Duration::from_millis(50)).await;
-                            let elapsed_ms = started.elapsed().as_millis() as u64;
-                            let remaining = total_ms.saturating_sub(elapsed_ms);
-                            if remaining == 0 {
-                                notification.set(None);
-                                clipboard::clear_clipboard();
-                                break;
-                            }
-                            notification.set(Some(ToastState {
-                                label: current.label.clone(),
-                                duration_ms: total_ms,
-                                remaining_ms: remaining,
-                            }));
+            let mut latest_toast_id = 0u64;
+            loop {
+                while let Ok(command) = commands.try_recv() {
+                    match command {
+                        ToastCommand::Cancel(id) => {
+                            notification.write().retain(|toast| toast.id != id)
+                        }
+                        ToastCommand::Show(mut current) => {
+                            current.id = notification()
+                                .iter()
+                                .map(|toast| toast.id)
+                                .max()
+                                .unwrap_or(0)
+                                + 1;
+                            latest_toast_id = current.id;
+                            notification.write().push(current);
                         }
                     }
                 }
+
+                futures_timer::Delay::new(std::time::Duration::from_millis(50)).await;
+                let mut should_clear_clipboard = false;
+                let mut updated = notification();
+                for toast in &mut updated {
+                    toast.remaining_ms = toast.remaining_ms.saturating_sub(50);
+                    if toast.remaining_ms == 0 && toast.id == latest_toast_id {
+                        should_clear_clipboard = true;
+                    }
+                }
+                updated.retain(|toast| toast.remaining_ms > 0);
+                if should_clear_clipboard {
+                    clipboard::clear_clipboard();
+                }
+                notification.set(updated);
             }
         },
     );
@@ -372,13 +376,6 @@ fn VaultScreen(
     let folders: Vec<VaultFolder> = vault().map(|v| v.folders).unwrap_or_default();
     let folders_for_select = folders.clone();
     let notification_snapshot = notification();
-    let toast_progress = notification_snapshot.as_ref().map(|toast| {
-        if toast.duration_ms == 0 {
-            0.0
-        } else {
-            ((toast.remaining_ms as f64 / toast.duration_ms as f64) * 100.0).clamp(0.0, 100.0)
-        }
-    });
 
     rsx! {
         div { class: if settings().theme == AppTheme::Light { "vault-screen light-theme" } else { "vault-screen" },
@@ -429,6 +426,7 @@ fn VaultScreen(
                     aria_label: "Create backup",
                     onclick: move |_| match create_backup() {
                         Ok(path) => copy_timer.send(ToastCommand::Show(ToastState {
+                            id: 0,
                             label: format!("Backup saved to {path}"),
                             duration_ms: 5000,
                             remaining_ms: 5000,
@@ -450,28 +448,35 @@ fn VaultScreen(
                 p { class: "error", "{msg}" }
             }
 
-            if let Some(toast) = notification_snapshot {
+            if !notification_snapshot.is_empty() {
                 div { class: match settings().toast_position {
-                    ToastPosition::TopLeft => "toast toast-top-left",
-                    ToastPosition::TopCenter => "toast toast-top-center",
-                    ToastPosition::TopRight => "toast toast-top-right",
-                    ToastPosition::CenterLeft => "toast toast-center-left",
-                    ToastPosition::Center => "toast toast-center",
-                    ToastPosition::CenterRight => "toast toast-center-right",
-                    ToastPosition::BottomLeft => "toast toast-bottom-left",
-                    ToastPosition::BottomCenter => "toast toast-bottom-center",
-                    ToastPosition::BottomRight => "toast toast-bottom-right",
+                    ToastPosition::TopLeft => "toast-stack toast-top-left",
+                    ToastPosition::TopCenter => "toast-stack toast-top-center",
+                    ToastPosition::TopRight => "toast-stack toast-top-right",
+                    ToastPosition::CenterLeft => "toast-stack toast-center-left",
+                    ToastPosition::Center => "toast-stack toast-center",
+                    ToastPosition::CenterRight => "toast-stack toast-center-right",
+                    ToastPosition::BottomLeft => "toast-stack toast-bottom-left",
+                    ToastPosition::BottomCenter => "toast-stack toast-bottom-center",
+                    ToastPosition::BottomRight => "toast-stack toast-bottom-right",
                 },
-                    div { class: "toast-content",
-                        span { "{toast.label}" }
-                        div { class: "toast-timer-bar",
-                            div { class: "toast-timer-fill", style: "width: {toast_progress.unwrap_or(0.0)}%" }
+                    for toast in notification_snapshot {
+                        div { class: "toast",
+                            div { class: "toast-content",
+                                span { "{toast.label}" }
+                                div { class: "toast-timer-bar",
+                                    div { class: "toast-timer-fill", style: "width: {((toast.remaining_ms as f64 / toast.duration_ms.max(1) as f64) * 100.0).clamp(0.0, 100.0)}%" }
+                                }
+                            }
+                            button {
+                                class: "toast-close",
+                                onclick: {
+                                    let id = toast.id;
+                                    move |_| copy_timer.send(ToastCommand::Cancel(id))
+                                },
+                                "×"
+                            }
                         }
-                    }
-                    button {
-                        class: "toast-close",
-                        onclick: move |_| copy_timer.send(ToastCommand::Cancel),
-                        "×"
                     }
                 }
             }
@@ -525,6 +530,7 @@ fn VaultScreen(
                                             move |_| {
                                                 clipboard::copy_to_clipboard(&username);
                                                 copy_timer.send(ToastCommand::Show(ToastState {
+                                                    id: 0,
                                                     label: "Username copied".into(),
                                                     duration_ms: timeout.saturating_mul(1000),
                                                     remaining_ms: timeout.saturating_mul(1000),
@@ -543,6 +549,7 @@ fn VaultScreen(
                                             move |_| {
                                                 clipboard::copy_to_clipboard(&password);
                                                 copy_timer.send(ToastCommand::Show(ToastState {
+                                                    id: 0,
                                                     label: "Password copied".into(),
                                                     duration_ms: timeout.saturating_mul(1000),
                                                     remaining_ms: timeout.saturating_mul(1000),
@@ -704,6 +711,7 @@ fn VaultScreen(
                         let timeout = settings().clipboard_timeout_secs.max(1);
                         clipboard::copy_to_clipboard(&password);
                         copy_timer.send(ToastCommand::Show(ToastState {
+                            id: 0,
                             label: "Generated password copied".into(),
                             duration_ms: timeout.saturating_mul(1000),
                             remaining_ms: timeout.saturating_mul(1000),
@@ -713,6 +721,7 @@ fn VaultScreen(
                         let timeout = settings().clipboard_timeout_secs.max(1);
                         clipboard::copy_to_clipboard(&password);
                         copy_timer.send(ToastCommand::Show(ToastState {
+                            id: 0,
                             label: "Generated password copied".into(),
                             duration_ms: timeout.saturating_mul(1000),
                             remaining_ms: timeout.saturating_mul(1000),
@@ -730,6 +739,7 @@ fn VaultScreen(
                         let timeout = settings().clipboard_timeout_secs.max(1);
                         clipboard::copy_to_clipboard(&password);
                         copy_timer.send(ToastCommand::Show(ToastState {
+                            id: 0,
                             label: "Generated password copied".into(),
                             duration_ms: timeout.saturating_mul(1000),
                             remaining_ms: timeout.saturating_mul(1000),
@@ -774,6 +784,7 @@ fn VaultScreen(
                                             delete_entry(id);
                                             pending_delete.set(None);
                                             copy_timer.send(ToastCommand::Show(ToastState {
+                                                id: 0,
                                                 label: format!("Backup validated, then entry deleted: {path}"),
                                                 duration_ms: 5000,
                                                 remaining_ms: 5000,
@@ -811,6 +822,7 @@ fn SettingsDialog(
     on_error: EventHandler<String>,
 ) -> Element {
     let mut settings = settings;
+    let mut active_section = use_signal(|| "general");
 
     let mut save = move |updated: AppSettings| match storage::save_settings(&updated) {
         Ok(()) => settings.set(updated),
@@ -831,7 +843,31 @@ fn SettingsDialog(
                         "×"
                     }
                 }
-                div { class: "settings-section",
+                div { class: "settings-layout",
+                    nav { class: "settings-nav", aria_label: "Settings sections",
+                        button {
+                            class: if active_section() == "general" { "settings-nav-item active" } else { "settings-nav-item" },
+                            onclick: move |_| active_section.set("general"),
+                            "General"
+                        }
+                        button {
+                            class: if active_section() == "appearance" { "settings-nav-item active" } else { "settings-nav-item" },
+                            onclick: move |_| active_section.set("appearance"),
+                            "Appearance"
+                        }
+                        button {
+                            class: if active_section() == "notifications" { "settings-nav-item active" } else { "settings-nav-item" },
+                            onclick: move |_| active_section.set("notifications"),
+                            "Notifications"
+                        }
+                        button {
+                            class: if active_section() == "passwords" { "settings-nav-item active" } else { "settings-nav-item" },
+                            onclick: move |_| active_section.set("passwords"),
+                            "Passwords"
+                        }
+                    }
+                    div { class: "settings-content",
+                div { class: if active_section() == "appearance" { "settings-section active" } else { "settings-section" },
                     label { "Appearance" }
                     select {
                         value: match settings().theme {
@@ -854,7 +890,7 @@ fn SettingsDialog(
                         option { value: "system", "Use system preference" }
                     }
                 }
-                div { class: "settings-section settings-toggle",
+                div { class: if active_section() == "general" { "settings-section settings-toggle active" } else { "settings-section settings-toggle" },
                     div {
                         label { "Confirm before deleting" }
                         p { class: "settings-help", "Ask for confirmation before permanently removing an entry." }
@@ -869,7 +905,7 @@ fn SettingsDialog(
                         },
                     }
                 }
-                div { class: "settings-section",
+                div { class: if active_section() == "appearance" { "settings-section active" } else { "settings-section" },
                     label { "Entry actions" }
                     p { class: "settings-help", "Choose descriptive buttons or compact icons in each entry row." }
                     select {
@@ -890,7 +926,7 @@ fn SettingsDialog(
                         option { value: "icons", "Compact icons" }
                     }
                 }
-                div { class: "settings-section",
+                div { class: if active_section() == "appearance" { "settings-section active" } else { "settings-section" },
                     label { "Primary actions" }
                     p { class: "settings-help", "Choose descriptive buttons or compact icons for the main toolbar actions." }
                     select {
@@ -911,7 +947,7 @@ fn SettingsDialog(
                         option { value: "icons", "Compact icons" }
                     }
                 }
-                div { class: "settings-section",
+                div { class: if active_section() == "general" { "settings-section active" } else { "settings-section" },
                     label { "Clipboard timeout" }
                     p { class: "settings-help", "Copied credentials are cleared automatically after this time." }
                     select {
@@ -929,7 +965,7 @@ fn SettingsDialog(
                         option { value: "60", "60 seconds" }
                     }
                 }
-                div { class: "settings-section",
+                div { class: if active_section() == "notifications" { "settings-section active" } else { "settings-section" },
                     label { "Toast position" }
                     p { class: "settings-help", "Choose where copy and backup notifications appear." }
                     select {
@@ -970,7 +1006,7 @@ fn SettingsDialog(
                         option { value: "bottom-right", "Bottom right" }
                     }
                 }
-                div { class: "settings-section",
+                div { class: if active_section() == "passwords" { "settings-section active" } else { "settings-section" },
                     label { "Password generator defaults" }
                     p { class: "settings-help", "These defaults apply to the standalone generator and Edit Entry." }
                     label { "Default length" }
@@ -994,7 +1030,7 @@ fn SettingsDialog(
                         label { input { r#type: "checkbox", checked: settings().generator_symbols, onchange: move |event| { let mut updated = settings(); updated.generator_symbols = event.value() == "true"; save(updated); } } " Special characters" }
                     }
                 }
-                div { class: "settings-section",
+                div { class: if active_section() == "passwords" { "settings-section active" } else { "settings-section" },
                     label { "Edit Entry password generation" }
                     p { class: "settings-help", "Choose direct generation or open the full generator when editing an entry." }
                     select {
@@ -1013,6 +1049,8 @@ fn SettingsDialog(
                         },
                         option { value: "auto", "Auto-generate directly" }
                         option { value: "full", "Open full password generator" }
+                    }
+                }
                     }
                 }
                 div { class: "modal-actions",

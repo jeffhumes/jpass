@@ -386,6 +386,39 @@ fn VaultScreen(
         Ok(format!("Vault synced at revision {revision}"))
     };
 
+    let mut restore_remote = move || -> Result<String, String> {
+        let current_settings = settings();
+        if !current_settings.sync_enabled {
+            return Err("Sync is disabled in Settings.".into());
+        }
+        let Some(folder) = current_settings.sync_folder.as_deref() else {
+            return Err("Choose a local sync folder in Settings first.".into());
+        };
+        let Some(password) = master_password() else {
+            return Err("Vault is locked.".into());
+        };
+        let Some(remote) = storage::download_sync(std::path::Path::new(folder))
+            .map_err(|e| e.to_string())?
+        else {
+            return Err("No remote vault was found in the sync folder.".into());
+        };
+        let restored = crypto::decrypt(&remote.vault, &password)
+            .map_err(|_| "Restore failed: remote vault could not be decrypted.".to_string())?;
+        let restored_vault = Vault::from_json(&restored)
+            .map_err(|_| "Restore failed: remote vault data is invalid.".to_string())?;
+
+        let backup_path = create_validated_backup()?;
+        storage::save_encrypted(&remote.vault).map_err(|e| e.to_string())?;
+        vault.set(Some(restored_vault));
+
+        let mut updated = current_settings;
+        updated.sync_revision = remote.revision;
+        updated.last_sync_at = Some(chrono::Utc::now());
+        storage::save_settings(&updated).map_err(|e| e.to_string())?;
+        settings.set(updated);
+        Ok(format!("Restored remote revision {}; local backup: {backup_path}", remote.revision))
+    };
+
     let lock = move |_| {
         vault.set(None);
         master_password.set(None);
@@ -486,6 +519,21 @@ fn VaultScreen(
                         Err(error) => save_error.set(Some(format!("Sync failed: {error}"))),
                     },
                     if settings().primary_action_display == PrimaryActionDisplay::Icons { "↻" } else { "Sync" }
+                }
+                button {
+                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
+                    title: "Download and restore vault",
+                    aria_label: "Download and restore vault",
+                    onclick: move |_| match restore_remote() {
+                        Ok(message) => copy_timer.send(ToastCommand::Show(ToastState {
+                            id: 0,
+                            label: message,
+                            duration_ms: 7000,
+                            remaining_ms: 7000,
+                        })),
+                        Err(error) => save_error.set(Some(error)),
+                    },
+                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "↓" } else { "Restore" }
                 }
                 button {
                     class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "lock-btn icon-button primary-action" } else { "lock-btn primary-action" },

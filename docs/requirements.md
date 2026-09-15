@@ -25,7 +25,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 - Store more than username/password pairs, including SSH keys, API tokens, recovery codes, certificates, and other sensitive fields.
 - [~] Allow optional, user-controlled vault synchronization across supported platforms. Shared encrypted sync envelopes, a desktop local-folder provider, native desktop folder picker, Settings controls, and Sync Now with remote-newer protection are implemented; restore, full conflict resolution, and other transports remain pending.
 - [~] Support local vault export and backup. Encrypted desktop backups are implemented; native file destinations and additional export formats remain pending.
-- Support restoring from a backup with validation before applying changes.
+- [~] Support restoring from a backup with validation before applying changes. Desktop remote restore is implemented with a safety backup; cherry-pick restore and other transports remain pending.
 - Allow users to cherry-pick individual entries, folders, or selected backup content to restore instead of requiring a full-vault restore.
 - Let users choose encrypted/password-protected or plain-text export output.
 - Support formats such as XML, JSON, CSV, TSV, and raw data.

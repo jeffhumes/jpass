@@ -624,6 +624,23 @@ label {
   overflow-wrap: anywhere;
 }
 
+.sync-folder-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sync-folder-path {
+  flex: 1;
+  min-width: 0;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .settings-heading {
   display: flex;
   align-items: flex-start;

@@ -53,6 +53,12 @@ pub fn local_folder_sync(folder: impl Into<PathBuf>) -> Result<LocalFolderSync, 
     LocalFolderSync::new(folder)
 }
 
+pub fn choose_sync_folder() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .set_title("Choose JPass sync folder")
+        .pick_folder()
+}
+
 impl VaultStore for DesktopStore {
     type Error = PlatformError;
 

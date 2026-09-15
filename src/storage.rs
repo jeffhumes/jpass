@@ -63,3 +63,10 @@ pub fn download_sync(folder: &Path) -> Result<Option<SyncEnvelope>, StorageError
         .download_sync(folder)
         .map_err(|e| StorageError::Backend(e.to_string()))
 }
+
+pub fn choose_sync_folder() -> Result<Option<PathBuf>, StorageError> {
+    let adapter = PlatformAdapter::current();
+    adapter
+        .choose_sync_folder()
+        .map_err(|e| StorageError::Backend(e.to_string()))
+}

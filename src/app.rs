@@ -1131,15 +1131,27 @@ fn SettingsDialog(
                         }
                     }
                     label { "Local sync folder" }
-                    input {
-                        placeholder: "Folder path",
-                        value: settings().sync_folder.clone().unwrap_or_default(),
-                        oninput: move |event| {
-                            let mut updated = settings();
-                            let path = event.value().trim().to_string();
-                            updated.sync_folder = if path.is_empty() { None } else { Some(path) };
-                            save(updated);
-                        },
+                    div { class: "sync-folder-picker",
+                        div { class: "sync-folder-path",
+                            if let Some(path) = settings().sync_folder.clone() {
+                                "{path}"
+                            } else {
+                                "No folder selected"
+                            }
+                        }
+                        button {
+                            class: "secondary-btn",
+                            onclick: move |_| match storage::choose_sync_folder() {
+                                Ok(Some(path)) => {
+                                    let mut updated = settings();
+                                    updated.sync_folder = Some(path.display().to_string());
+                                    save(updated);
+                                }
+                                Ok(None) => {}
+                                Err(error) => on_error.call(format!("Folder picker failed: {error}")),
+                            },
+                            "Browse..."
+                        }
                     }
                     div { class: "sync-status",
                         span { "Revision: {settings().sync_revision}" }

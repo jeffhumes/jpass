@@ -7,6 +7,7 @@ use jpass_core::{
     AppSettings, AppTheme, EditPasswordGenerationMode, EntryActionDisplay, PrimaryActionDisplay,
     SyncEnvelope, ToastPosition,
 };
+use std::collections::HashSet;
 use uuid::Uuid;
 
 const MAIN_CSS: &str = include_str!("../assets/main.css");
@@ -25,6 +26,64 @@ struct ToastState {
     label: String,
     duration_ms: u64,
     remaining_ms: u64,
+}
+
+fn flatten_folder_tree(folders: &[VaultFolder]) -> Vec<(VaultFolder, usize)> {
+    fn append_children(
+        folders: &[VaultFolder],
+        parent_id: Option<Uuid>,
+        depth: usize,
+        result: &mut Vec<(VaultFolder, usize)>,
+    ) {
+        for folder in folders
+            .iter()
+            .filter(|folder| folder.parent_id == parent_id)
+        {
+            result.push((folder.clone(), depth));
+            append_children(folders, Some(folder.id), depth + 1, result);
+        }
+    }
+
+    let mut result = Vec::new();
+    append_children(folders, None, 0, &mut result);
+    result
+}
+
+fn folder_path(folders: &[VaultFolder], folder_id: Uuid) -> String {
+    let mut names = Vec::new();
+    let mut current_id = Some(folder_id);
+    let mut guard = 0;
+
+    while let Some(id) = current_id {
+        let Some(folder) = folders.iter().find(|folder| folder.id == id) else {
+            break;
+        };
+        names.push(folder.name.clone());
+        current_id = folder.parent_id;
+        guard += 1;
+        if guard > folders.len() {
+            break;
+        }
+    }
+
+    names.reverse();
+    names.join(" / ")
+}
+
+fn folder_has_children(folders: &[VaultFolder], folder_id: Uuid) -> bool {
+    folders
+        .iter()
+        .any(|folder| folder.parent_id == Some(folder_id))
+}
+
+fn folder_is_visible(folders: &[VaultFolder], folder_id: Uuid, expanded: &HashSet<Uuid>) -> bool {
+    let Some(folder) = folders.iter().find(|folder| folder.id == folder_id) else {
+        return false;
+    };
+    let Some(parent_id) = folder.parent_id else {
+        return true;
+    };
+    expanded.contains(&parent_id) && folder_is_visible(folders, parent_id, expanded)
 }
 
 enum ToastCommand {
@@ -212,6 +271,8 @@ fn VaultScreen(
     let mut master_password = master_password;
     let mut search = use_signal(String::new);
     let mut selected_folder = use_signal::<Option<Uuid>>(|| None);
+    let mut expanded_folders = use_signal(HashSet::<Uuid>::new);
+    let mut expanded_initialized = use_signal(|| false);
     let mut editing = use_signal::<Option<VaultEntry>>(|| None);
     let mut show_editor = use_signal(|| false);
     let mut show_folder_modal = use_signal(|| false);
@@ -222,6 +283,7 @@ fn VaultScreen(
     let mut pending_delete = use_signal::<Option<VaultEntry>>(|| None);
     let mut pending_move = use_signal::<Option<VaultEntry>>(|| None);
     let mut new_folder_name = use_signal(String::new);
+    let mut new_folder_parent_id = use_signal(String::new);
     let mut save_error = use_signal::<Option<String>>(|| None);
     let mut notification = use_signal::<Vec<ToastState>>(Vec::new);
     let mut settings = use_signal(|| storage::load_settings().unwrap_or_default());
@@ -292,7 +354,7 @@ fn VaultScreen(
         move |(entry_id, folder_id, new_folder_name): (Uuid, Option<Uuid>, Option<String>)| {
             if let Some(mut v) = vault() {
                 let target_folder = if let Some(name) = new_folder_name {
-                    match v.create_folder(&name) {
+                    match v.create_folder(&name, folder_id) {
                         Ok(folder) => Some(folder.id),
                         Err(error) => {
                             save_error.set(Some(error));
@@ -369,14 +431,15 @@ fn VaultScreen(
             let json = current_vault.to_json().map_err(|e| e.to_string())?;
             let current_blob =
                 crypto::encrypt(&json, &password).map_err(|_| "encryption failed".to_string())?;
-            let validated = crypto::decrypt(&current_blob, &password).map_err(|_| {
-                "Restore failed: safety backup could not be validated.".to_string()
-            })?;
+            let validated = crypto::decrypt(&current_blob, &password)
+                .map_err(|_| "Restore failed: safety backup could not be validated.".to_string())?;
             let validated_vault = Vault::from_json(&validated).map_err(|_| {
                 "Restore failed: safety backup vault data could not be parsed.".to_string()
             })?;
             if validated_vault.to_json().map_err(|e| e.to_string())? != json {
-                return Err("Restore failed: safety backup validation did not match the vault.".into());
+                return Err(
+                    "Restore failed: safety backup validation did not match the vault.".into(),
+                );
             }
             storage::save_encrypted_backup(&current_blob)
                 .map_err(|e| e.to_string())?
@@ -472,16 +535,26 @@ fn VaultScreen(
         screen.set(Screen::Unlock);
     };
 
-    #[cfg(all(feature = "desktop", any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    #[cfg(all(
+        feature = "desktop",
+        any(target_os = "windows", target_os = "linux", target_os = "macos")
+    ))]
     {
-        let _native_menu_handler = dioxus::desktop::use_muda_event_handler(move |event| {
-            match event.id().as_ref() {
+        let _native_menu_handler =
+            dioxus::desktop::use_muda_event_handler(move |event| match event.id().as_ref() {
                 "add-entry" => {
-                    editing.set(Some(VaultEntry::new(String::new(), String::new(), String::new(), String::new(), String::new())));
+                    editing.set(Some(VaultEntry::new(
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                    )));
                     show_editor.set(true);
                 }
                 "new-folder" => {
                     new_folder_name.set(String::new());
+                    new_folder_parent_id.set(String::new());
                     show_folder_modal.set(true);
                 }
                 "settings" => show_settings.set(true),
@@ -535,8 +608,7 @@ fn VaultScreen(
                     remaining_ms: 4000,
                 })),
                 _ => {}
-            }
-        });
+            });
     }
 
     let entries: Vec<VaultEntry> = vault()
@@ -546,7 +618,17 @@ fn VaultScreen(
         .filter(|e| {
             let q = search().to_lowercase();
             let matches_folder = match selected_folder() {
-                Some(folder_id) => e.folder_id == Some(folder_id),
+                Some(folder_id) => e
+                    .folder_id
+                    .map(|entry_folder_id| {
+                        vault()
+                            .as_ref()
+                            .map(|current_vault| {
+                                current_vault.folder_is_in_subtree(entry_folder_id, folder_id)
+                            })
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false),
                 None => true,
             };
             matches_folder
@@ -558,7 +640,17 @@ fn VaultScreen(
         .collect();
 
     let folders: Vec<VaultFolder> = vault().map(|v| v.folders).unwrap_or_default();
+    use_effect(move || {
+        let folders = vault().map(|v| v.folders).unwrap_or_default();
+        if !expanded_initialized() && !folders.is_empty() {
+            expanded_folders.set(folders.iter().map(|folder| folder.id).collect());
+            expanded_initialized.set(true);
+        }
+    });
+    let expanded_snapshot = expanded_folders();
     let folders_for_select = folders.clone();
+    let folder_tree = flatten_folder_tree(&folders);
+    let folder_tree_for_select = folder_tree.clone();
     let notification_snapshot = notification();
 
     rsx! {
@@ -587,6 +679,7 @@ fn VaultScreen(
                     aria_label: "New folder",
                     onclick: move |_| {
                         new_folder_name.set(String::new());
+                        new_folder_parent_id.set(String::new());
                         show_folder_modal.set(true);
                     },
                     if settings().primary_action_display == PrimaryActionDisplay::Icons { "📁+" } else { "+ New Folder" }
@@ -717,19 +810,57 @@ fn VaultScreen(
 
             div { class: "vault-layout",
                 aside { class: "folder-panel",
+                    div { class: "folder-panel-actions",
+                        button {
+                            class: "folder-tree-action",
+                            onclick: move |_| expanded_folders.set(folders.iter().map(|folder| folder.id).collect()),
+                            "Expand all"
+                        }
+                        button {
+                            class: "folder-tree-action",
+                            onclick: move |_| expanded_folders.set(HashSet::new()),
+                            "Collapse all"
+                        }
+                    }
                     button {
                         class: if selected_folder() == None { "folder-item active" } else { "folder-item" },
                         onclick: move |_| selected_folder.set(None),
                         "All entries"
                     }
-                    for folder in folders {
-                        button {
-                            class: if selected_folder() == Some(folder.id) { "folder-item active" } else { "folder-item" },
-                            onclick: {
-                                let id = folder.id;
-                                move |_| selected_folder.set(Some(id))
-                            },
-                            "{folder.name}"
+                    for (folder, depth) in folder_tree {
+                        if folder_is_visible(&folders, folder.id, &expanded_snapshot) {
+                            div {
+                                class: if depth > 0 { "folder-tree-row nested" } else { "folder-tree-row" },
+                                style: "margin-left: {depth}rem",
+                                if folder_has_children(&folders, folder.id) {
+                                    button {
+                                        class: "folder-expand-button",
+                                        title: if expanded_snapshot.contains(&folder.id) { "Collapse folder" } else { "Expand folder" },
+                                        aria_label: if expanded_snapshot.contains(&folder.id) { "Collapse folder" } else { "Expand folder" },
+                                        onclick: {
+                                            let id = folder.id;
+                                            move |_| {
+                                                let mut updated = expanded_folders();
+                                                if !updated.remove(&id) {
+                                                    updated.insert(id);
+                                                }
+                                                expanded_folders.set(updated);
+                                            }
+                                        },
+                                        if expanded_snapshot.contains(&folder.id) { "▾" } else { "▸" }
+                                    }
+                                } else {
+                                    span { class: "folder-expand-spacer", "" }
+                                }
+                                button {
+                                    class: if selected_folder() == Some(folder.id) { "folder-item active" } else { "folder-item" },
+                                    onclick: {
+                                        let id = folder.id;
+                                        move |_| selected_folder.set(Some(id))
+                                    },
+                                    span { "{folder.name}" }
+                                }
+                            }
                         }
                     }
                 }
@@ -837,10 +968,10 @@ fn VaultScreen(
                         on_open_generator: move |_| show_entry_generator.set(true),
                         folders: folders_for_select.clone(),
                         on_cancel: move |_| show_editor.set(false),
-                        on_save: move |(mut updated, new_folder_name): (VaultEntry, Option<String>)| {
+                        on_save: move |(mut updated, new_folder_name, new_folder_parent): (VaultEntry, Option<String>, Option<Uuid>)| {
                             if let Some(mut v) = vault() {
                                 if let Some(name) = new_folder_name {
-                                    match v.create_folder(&name) {
+                                    match v.create_folder(&name, new_folder_parent) {
                                         Ok(folder) => updated.folder_id = Some(folder.id),
                                         Err(error) => {
                                             save_error.set(Some(error));
@@ -871,6 +1002,18 @@ fn VaultScreen(
                 div { class: "modal-backdrop",
                     div { class: "modal",
                         h2 { "New Folder" }
+                        label { "Parent folder" }
+                        select {
+                            value: "{new_folder_parent_id}",
+                            onchange: move |event| new_folder_parent_id.set(event.value()),
+                            option { value: "", "Top-level folder" }
+                            for (folder, depth) in folder_tree_for_select.clone() {
+                                option {
+                                    value: "{folder.id}",
+                                    "{folder_path(&folders, folder.id)}"
+                                }
+                            }
+                        }
                         input {
                             placeholder: "Folder name",
                             value: "{new_folder_name}",
@@ -879,7 +1022,7 @@ fn VaultScreen(
                                 if e.key() == Key::Enter {
                                     if let Some(mut v) = vault() {
                                         let name = new_folder_name();
-                                        match v.create_folder(&name) {
+                                        match v.create_folder(&name, Uuid::parse_str(&new_folder_parent_id()).ok()) {
                                             Ok(folder) => {
                                                 match persist(&v) {
                                                     Ok(()) => {
@@ -888,6 +1031,7 @@ fn VaultScreen(
                                                         save_error.set(None);
                                                         show_folder_modal.set(false);
                                                         new_folder_name.set(String::new());
+                                                        new_folder_parent_id.set(String::new());
                                                     }
                                                     Err(err) => save_error.set(Some(err)),
                                                 }
@@ -899,13 +1043,13 @@ fn VaultScreen(
                             },
                         }
                         div { class: "modal-actions",
-                            button { onclick: move |_| { show_folder_modal.set(false); new_folder_name.set(String::new()); }, "Cancel" }
+                            button { onclick: move |_| { show_folder_modal.set(false); new_folder_name.set(String::new()); new_folder_parent_id.set(String::new()); }, "Cancel" }
                             button {
                                 class: "primary",
                                 onclick: move |_| {
                                     if let Some(mut v) = vault() {
                                         let name = new_folder_name();
-                                        match v.create_folder(&name) {
+                                        match v.create_folder(&name, Uuid::parse_str(&new_folder_parent_id()).ok()) {
                                             Ok(folder) => {
                                                 match persist(&v) {
                                                     Ok(()) => {
@@ -914,6 +1058,7 @@ fn VaultScreen(
                                                         save_error.set(None);
                                                         show_folder_modal.set(false);
                                                         new_folder_name.set(String::new());
+                                                        new_folder_parent_id.set(String::new());
                                                     }
                                                     Err(err) => save_error.set(Some(err)),
                                                 }
@@ -1463,6 +1608,7 @@ fn MoveEntryDialog(
     let mut folder_id = use_signal(|| entry.folder_id.map(|id| id.to_string()).unwrap_or_default());
     let mut new_folder_name = use_signal(String::new);
     let mut show_new_folder = use_signal(|| false);
+    let folder_tree = flatten_folder_tree(&folders);
 
     rsx! {
         div { class: "modal-backdrop",
@@ -1476,8 +1622,8 @@ fn MoveEntryDialog(
                         value: "{folder_id}",
                         onchange: move |event| folder_id.set(event.value()),
                         option { value: "", "Unfiled" }
-                        for folder in folders {
-                            option { value: "{folder.id}", "{folder.name}" }
+                        for (folder, depth) in folder_tree {
+                            option { value: "{folder.id}", "{folder_path(&folders, folder.id)}" }
                         }
                     }
                     button {
@@ -1528,7 +1674,7 @@ fn EntryEditor(
     settings: Signal<AppSettings>,
     generated_password: Signal<Option<String>>,
     folders: Vec<VaultFolder>,
-    on_save: EventHandler<(VaultEntry, Option<String>)>,
+    on_save: EventHandler<(VaultEntry, Option<String>, Option<Uuid>)>,
     on_cancel: EventHandler<()>,
     on_open_generator: EventHandler<()>,
 ) -> Element {
@@ -1541,6 +1687,7 @@ fn EntryEditor(
     let mut folder_id = use_signal(|| entry.folder_id.map(|id| id.to_string()).unwrap_or_default());
     let mut new_folder_name = use_signal(String::new);
     let mut show_new_folder = use_signal(|| false);
+    let folder_tree = flatten_folder_tree(&folders);
 
     let entry_id = entry.id;
     let created_at = entry.created_at;
@@ -1595,8 +1742,8 @@ fn EntryEditor(
                         value: "{folder_id}",
                         onchange: move |e| folder_id.set(e.value()),
                         option { value: "", "Unfiled" }
-                        for folder in folders {
-                            option { value: "{folder.id}", "{folder.name}" }
+                        for (folder, depth) in folder_tree {
+                            option { value: "{folder.id}", "{folder_path(&folders, folder.id)}" }
                         }
                     }
                     button {
@@ -1632,7 +1779,7 @@ fn EntryEditor(
                                 folder_id: selected_folder,
                                 created_at,
                                 updated_at: chrono::Utc::now(),
-                            }, if new_folder.is_empty() { None } else { Some(new_folder) }));
+                            }, if new_folder.is_empty() { None } else { Some(new_folder) }, selected_folder));
                         },
                         "Save"
                     }

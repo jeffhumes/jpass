@@ -6,16 +6,23 @@ use uuid::Uuid;
 pub struct VaultFolder {
     pub id: Uuid,
     pub name: String,
+    #[serde(default)]
+    pub parent_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 impl VaultFolder {
     pub fn new(name: String) -> Self {
+        Self::new_in_parent(name, None)
+    }
+
+    pub fn new_in_parent(name: String, parent_id: Option<Uuid>) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4(),
             name,
+            parent_id,
             created_at: now,
             updated_at: now,
         }
@@ -91,7 +98,11 @@ impl Vault {
         self.entries.retain(|e| e.id != id);
     }
 
-    pub fn create_folder(&mut self, name: &str) -> Result<VaultFolder, String> {
+    pub fn create_folder(
+        &mut self,
+        name: &str,
+        parent_id: Option<Uuid>,
+    ) -> Result<VaultFolder, String> {
         let name = name.trim();
         if name.is_empty() {
             return Err("Folder name cannot be empty.".into());
@@ -99,14 +110,35 @@ impl Vault {
         if self
             .folders
             .iter()
-            .any(|folder| folder.name.eq_ignore_ascii_case(name))
+            .any(|folder| folder.parent_id == parent_id && folder.name.eq_ignore_ascii_case(name))
         {
-            return Err("Folder already exists.".into());
+            return Err("A folder with that name already exists here.".into());
         }
 
-        let folder = VaultFolder::new(name.to_string());
+        if let Some(parent_id) = parent_id {
+            if !self.folders.iter().any(|folder| folder.id == parent_id) {
+                return Err("Parent folder does not exist.".into());
+            }
+        }
+
+        let folder = VaultFolder::new_in_parent(name.to_string(), parent_id);
         self.folders.push(folder.clone());
         Ok(folder)
+    }
+
+    pub fn folder_is_in_subtree(&self, folder_id: Uuid, ancestor_id: Uuid) -> bool {
+        let mut current = Some(folder_id);
+        while let Some(id) = current {
+            if id == ancestor_id {
+                return true;
+            }
+            current = self
+                .folders
+                .iter()
+                .find(|folder| folder.id == id)
+                .and_then(|folder| folder.parent_id);
+        }
+        false
     }
 
     pub fn move_entry_to_folder(&mut self, entry_id: Uuid, folder_id: Option<Uuid>) -> bool {
@@ -176,11 +208,23 @@ mod tests {
         vault.add_entry(first);
         vault.add_entry(second);
 
-        let folder = vault.create_folder("Work").unwrap();
+        let folder = vault.create_folder("Work", None).unwrap();
         assert!(vault.move_entry_to_folder(id, Some(folder.id)));
         assert_eq!(vault.entries[0].folder_id, Some(folder.id));
 
         let moved = vault.entries.iter().find(|e| e.id == id).unwrap();
         assert_eq!(moved.folder_id, Some(folder.id));
+    }
+
+    #[test]
+    fn vault_supports_nested_folders_and_sibling_names() {
+        let mut vault = Vault::default();
+        let personal = vault.create_folder("Personal", None).unwrap();
+        let finances = vault.create_folder("Finances", Some(personal.id)).unwrap();
+
+        assert_eq!(finances.parent_id, Some(personal.id));
+        assert!(vault.folder_is_in_subtree(finances.id, personal.id));
+        assert!(vault.create_folder("Finances", Some(personal.id)).is_err());
+        assert!(vault.create_folder("Finances", None).is_ok());
     }
 }

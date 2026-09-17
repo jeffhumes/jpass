@@ -23,6 +23,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 ## Vault and Data
 
 - Store more than username/password pairs, including SSH keys, API tokens, recovery codes, certificates, and other sensitive fields.
+- Support multiple separate vaults, let users choose a vault at startup, and allow switching between vaults through an application menu option.
 - [~] Allow optional, user-controlled vault synchronization across supported platforms. Shared encrypted sync envelopes, a desktop local-folder provider, native desktop folder picker, Settings controls, Sync Now with remote-newer protection, and desktop remote restore are implemented; full conflict resolution and other transports remain pending.
 - [~] Support local vault export and backup. Encrypted desktop backups are implemented; native file destinations and additional export formats remain pending.
 - [~] Support restoring from a backup with validation before applying changes. Desktop local-file and sync-based restore now validate before replacement and create a safety backup; cherry-pick restore and other transports remain pending.
@@ -31,6 +32,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 - Support formats such as XML, JSON, CSV, TSV, and raw data.
 - Support credential export and import across supported platforms and formats.
 - Validate imported data and provide safe conflict handling.
+- [~] Support nested folders with parent and child levels, such as `Personal/Finances`, instead of limiting entries to a single folder level. Nested creation, indented navigation, descendant filtering, folder selection, and individual/all expand-collapse controls are implemented; nested rename/delete management remains pending.
 - [x] When adding an entry, let users select an existing folder or create a new folder for the entry before saving.
 - Provide a folder manager that lets users add, delete, and rename folders, and move entries between folders.
 - Allow users to share selected vault entries via text, with explicit confirmation, sensitivity warnings, and secure handling.

@@ -253,6 +253,77 @@ button.lock-btn {
   letter-spacing: 0.12em;
 }
 
+.folder-panel-actions {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0 0.1rem 0.25rem;
+}
+
+.folder-tree-action {
+  min-height: 30px;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.folder-tree-action:hover,
+.folder-tree-action:focus-visible {
+  color: var(--accent);
+  background: var(--surface-hover);
+}
+
+.folder-tree-row {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 0.15rem;
+}
+
+.folder-tree-row.nested::before {
+  content: "";
+  position: absolute;
+  top: -0.3rem;
+  bottom: -0.3rem;
+  left: -0.55rem;
+  border-left: 1px solid var(--border);
+}
+
+.folder-tree-row.nested::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -0.55rem;
+  width: 0.55rem;
+  border-top: 1px solid var(--border);
+}
+
+.folder-tree-row .folder-item {
+  flex: 1;
+}
+
+.folder-expand-button,
+.folder-expand-spacer {
+  flex: 0 0 24px;
+  width: 24px;
+  min-height: 38px;
+}
+
+.folder-expand-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1rem;
+}
+
+.folder-expand-button:hover,
+.folder-expand-button:focus-visible {
+  color: var(--accent);
+}
+
 .folder-item {
   width: 100%;
   min-height: 38px;

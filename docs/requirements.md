@@ -23,9 +23,9 @@ Existing requirements without a marker are treated as planned until explicitly r
 ## Vault and Data
 
 - Store more than username/password pairs, including SSH keys, API tokens, recovery codes, certificates, and other sensitive fields.
-- [~] Allow optional, user-controlled vault synchronization across supported platforms. Shared encrypted sync envelopes, a desktop local-folder provider, native desktop folder picker, Settings controls, and Sync Now with remote-newer protection are implemented; restore, full conflict resolution, and other transports remain pending.
+- [~] Allow optional, user-controlled vault synchronization across supported platforms. Shared encrypted sync envelopes, a desktop local-folder provider, native desktop folder picker, Settings controls, Sync Now with remote-newer protection, and desktop remote restore are implemented; full conflict resolution and other transports remain pending.
 - [~] Support local vault export and backup. Encrypted desktop backups are implemented; native file destinations and additional export formats remain pending.
-- [~] Support restoring from a backup with validation before applying changes. Desktop remote restore is implemented with a safety backup; cherry-pick restore and other transports remain pending.
+- [~] Support restoring from a backup with validation before applying changes. Desktop local-file and sync-based restore now validate before replacement and create a safety backup; cherry-pick restore and other transports remain pending.
 - Allow users to cherry-pick individual entries, folders, or selected backup content to restore instead of requiring a full-vault restore.
 - Let users choose encrypted/password-protected or plain-text export output.
 - Support formats such as XML, JSON, CSV, TSV, and raw data.
@@ -34,6 +34,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 - [x] When adding an entry, let users select an existing folder or create a new folder for the entry before saving.
 - Provide a folder manager that lets users add, delete, and rename folders, and move entries between folders.
 - Allow users to share selected vault entries via text, with explicit confirmation, sensitivity warnings, and secure handling.
+- Keep a history of previous passwords per entry so users can refer back to them.
 
 ## Authentication and Recovery
 
@@ -79,6 +80,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 
 ## User Experience
 
+- [x] Provide a native categorized application menu with File, Edit / Settings, and Help menus exposing the primary actions.
 - [x] Separate the Settings dialog into readable sections with a clickable navigation menu on the left.
 - [x] Prompt users for explicit confirmation before deleting a vault entry by default.
 - [x] Require the delete confirmation dialog to offer a validated encrypted vault backup before deletion, while allowing an explicit delete-without-backup choice.
@@ -86,6 +88,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 - Keep delete behavior consistent across supported platforms.
 - [x] Let users choose whether entry-list actions display descriptive text buttons or compact icons, with the preference available in the Settings dialog.
 - [x] Let users choose in Settings whether primary actions use descriptive text buttons or compact icons.
+- [x] Let users hide primary action buttons from the toolbar with the Show primary action icons setting.
 - [x] Use a lock icon for the Lock primary action and a folder icon for the New Folder primary action.
 - [x] Keep primary action icons consistent: Settings, Backup, and Lock use the same background and hover styling as the other primary icons.
 - [x] Remove the folder dropdown from entry rows and replace it with a dedicated Move button or icon.

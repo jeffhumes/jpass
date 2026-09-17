@@ -349,6 +349,49 @@ fn VaultScreen(
         Ok(path.display().to_string())
     };
 
+    let mut restore_from_backup = move || -> Result<Option<String>, String> {
+        let Some(path) = storage::choose_backup_file().map_err(|e| e.to_string())? else {
+            return Ok(None);
+        };
+        let Some(password) = master_password() else {
+            return Err("Restore failed: vault is locked.".into());
+        };
+        let blob = storage::load_encrypted_backup(&path).map_err(|e| e.to_string())?;
+        let restored = crypto::decrypt(&blob, &password)
+            .map_err(|_| "Restore failed: backup could not be decrypted.".to_string())?;
+        let restored_vault = Vault::from_json(&restored)
+            .map_err(|_| "Restore failed: backup vault data is invalid.".to_string())?;
+
+        let backup_path = {
+            let Some(current_vault) = vault() else {
+                return Err("Restore failed: vault is unavailable.".into());
+            };
+            let json = current_vault.to_json().map_err(|e| e.to_string())?;
+            let current_blob =
+                crypto::encrypt(&json, &password).map_err(|_| "encryption failed".to_string())?;
+            let validated = crypto::decrypt(&current_blob, &password).map_err(|_| {
+                "Restore failed: safety backup could not be validated.".to_string()
+            })?;
+            let validated_vault = Vault::from_json(&validated).map_err(|_| {
+                "Restore failed: safety backup vault data could not be parsed.".to_string()
+            })?;
+            if validated_vault.to_json().map_err(|e| e.to_string())? != json {
+                return Err("Restore failed: safety backup validation did not match the vault.".into());
+            }
+            storage::save_encrypted_backup(&current_blob)
+                .map_err(|e| e.to_string())?
+                .display()
+                .to_string()
+        };
+
+        storage::save_encrypted(&blob).map_err(|e| e.to_string())?;
+        vault.set(Some(restored_vault));
+        Ok(Some(format!(
+            "Restored backup {}; local backup: {backup_path}",
+            path.display()
+        )))
+    };
+
     let mut sync_now = move || -> Result<String, String> {
         let current_settings = settings();
         if !current_settings.sync_enabled {
@@ -364,8 +407,10 @@ fn VaultScreen(
             return Err("Vault is unavailable.".into());
         };
         let json = current_vault.to_json().map_err(|e| e.to_string())?;
-        let blob = crypto::encrypt(&json, &password).map_err(|_| "encryption failed".to_string())?;
-        let remote = storage::download_sync(std::path::Path::new(folder)).map_err(|e| e.to_string())?;
+        let blob =
+            crypto::encrypt(&json, &password).map_err(|_| "encryption failed".to_string())?;
+        let remote =
+            storage::download_sync(std::path::Path::new(folder)).map_err(|e| e.to_string())?;
         if let Some(remote) = remote {
             if remote.revision > current_settings.sync_revision {
                 return Err(format!(
@@ -376,8 +421,7 @@ fn VaultScreen(
         }
         let revision = current_settings.sync_revision + 1;
         let envelope = SyncEnvelope::new(current_settings.sync_device_id.clone(), revision, blob);
-        storage::upload_sync(std::path::Path::new(folder), &envelope)
-            .map_err(|e| e.to_string())?;
+        storage::upload_sync(std::path::Path::new(folder), &envelope).map_err(|e| e.to_string())?;
         let mut updated = current_settings;
         updated.sync_revision = revision;
         updated.last_sync_at = Some(chrono::Utc::now());
@@ -397,8 +441,8 @@ fn VaultScreen(
         let Some(password) = master_password() else {
             return Err("Vault is locked.".into());
         };
-        let Some(remote) = storage::download_sync(std::path::Path::new(folder))
-            .map_err(|e| e.to_string())?
+        let Some(remote) =
+            storage::download_sync(std::path::Path::new(folder)).map_err(|e| e.to_string())?
         else {
             return Err("No remote vault was found in the sync folder.".into());
         };
@@ -416,7 +460,10 @@ fn VaultScreen(
         updated.last_sync_at = Some(chrono::Utc::now());
         storage::save_settings(&updated).map_err(|e| e.to_string())?;
         settings.set(updated);
-        Ok(format!("Restored remote revision {}; local backup: {backup_path}", remote.revision))
+        Ok(format!(
+            "Restored remote revision {}; local backup: {backup_path}",
+            remote.revision
+        ))
     };
 
     let lock = move |_| {
@@ -424,6 +471,73 @@ fn VaultScreen(
         master_password.set(None);
         screen.set(Screen::Unlock);
     };
+
+    #[cfg(all(feature = "desktop", any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        let _native_menu_handler = dioxus::desktop::use_muda_event_handler(move |event| {
+            match event.id().as_ref() {
+                "add-entry" => {
+                    editing.set(Some(VaultEntry::new(String::new(), String::new(), String::new(), String::new(), String::new())));
+                    show_editor.set(true);
+                }
+                "new-folder" => {
+                    new_folder_name.set(String::new());
+                    show_folder_modal.set(true);
+                }
+                "settings" => show_settings.set(true),
+                "generator" => show_generator.set(true),
+                "backup" => match create_backup() {
+                    Ok(path) => copy_timer.send(ToastCommand::Show(ToastState {
+                        id: 0,
+                        label: format!("Backup saved to {path}"),
+                        duration_ms: 5000,
+                        remaining_ms: 5000,
+                    })),
+                    Err(error) => save_error.set(Some(format!("Backup failed: {error}"))),
+                },
+                "restore-file" => match restore_from_backup() {
+                    Ok(Some(message)) => copy_timer.send(ToastCommand::Show(ToastState {
+                        id: 0,
+                        label: message,
+                        duration_ms: 7000,
+                        remaining_ms: 7000,
+                    })),
+                    Ok(None) => {}
+                    Err(error) => save_error.set(Some(error)),
+                },
+                "sync-now" => match sync_now() {
+                    Ok(message) => copy_timer.send(ToastCommand::Show(ToastState {
+                        id: 0,
+                        label: message,
+                        duration_ms: 5000,
+                        remaining_ms: 5000,
+                    })),
+                    Err(error) => save_error.set(Some(format!("Sync failed: {error}"))),
+                },
+                "restore" => match restore_remote() {
+                    Ok(message) => copy_timer.send(ToastCommand::Show(ToastState {
+                        id: 0,
+                        label: message,
+                        duration_ms: 7000,
+                        remaining_ms: 7000,
+                    })),
+                    Err(error) => save_error.set(Some(error)),
+                },
+                "lock" => {
+                    vault.set(None);
+                    master_password.set(None);
+                    screen.set(Screen::Unlock);
+                }
+                "about" => copy_timer.send(ToastCommand::Show(ToastState {
+                    id: 0,
+                    label: "JPass password manager".to_string(),
+                    duration_ms: 4000,
+                    remaining_ms: 4000,
+                })),
+                _ => {}
+            }
+        });
+    }
 
     let entries: Vec<VaultEntry> = vault()
         .map(|v| v.entries)
@@ -456,16 +570,17 @@ fn VaultScreen(
                     value: "{search}",
                     oninput: move |e| search.set(e.value()),
                 }
-                button {
-                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "icon-button primary-action" } else { "primary-action" },
-                    title: "Add entry",
-                    aria_label: "Add entry",
-                    onclick: move |_| {
-                        editing.set(Some(VaultEntry::new(String::new(), String::new(), String::new(), String::new(), String::new())));
-                        show_editor.set(true);
-                    },
-                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "+" } else { "+ Add Entry" }
-                }
+                if settings().show_primary_action_icons {
+                    button {
+                        class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "icon-button primary-action" } else { "primary-action" },
+                        title: "Add entry",
+                        aria_label: "Add entry",
+                        onclick: move |_| {
+                            editing.set(Some(VaultEntry::new(String::new(), String::new(), String::new(), String::new(), String::new())));
+                            show_editor.set(true);
+                        },
+                        if settings().primary_action_display == PrimaryActionDisplay::Icons { "+" } else { "+ Add Entry" }
+                    }
                 button {
                     class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "icon-button primary-action" } else { "primary-action" },
                     title: "New folder",
@@ -507,18 +622,36 @@ fn VaultScreen(
                 }
                 button {
                     class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
-                    title: "Sync vault",
-                    aria_label: "Sync vault",
-                    onclick: move |_| match sync_now() {
-                        Ok(message) => copy_timer.send(ToastCommand::Show(ToastState {
+                    title: "Restore from backup file",
+                    aria_label: "Restore from backup file",
+                    onclick: move |_| match restore_from_backup() {
+                        Ok(Some(message)) => copy_timer.send(ToastCommand::Show(ToastState {
                             id: 0,
                             label: message,
-                            duration_ms: 5000,
-                            remaining_ms: 5000,
+                            duration_ms: 7000,
+                            remaining_ms: 7000,
                         })),
-                        Err(error) => save_error.set(Some(format!("Sync failed: {error}"))),
+                        Ok(None) => {}
+                        Err(error) => save_error.set(Some(error)),
                     },
-                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "↻" } else { "Sync" }
+                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "↥" } else { "Restore from File" }
+                }
+                if settings().sync_enabled {
+                    button {
+                        class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action sync-now-button" } else { "secondary-btn primary-action sync-now-button" },
+                        title: "Sync vault",
+                        aria_label: "Sync vault",
+                        onclick: move |_| match sync_now() {
+                            Ok(message) => copy_timer.send(ToastCommand::Show(ToastState {
+                                id: 0,
+                                label: message,
+                                duration_ms: 5000,
+                                remaining_ms: 5000,
+                            })),
+                            Err(error) => save_error.set(Some(format!("Sync failed: {error}"))),
+                        },
+                        if settings().primary_action_display == PrimaryActionDisplay::Icons { "↻" } else { "Sync Now" }
+                    }
                 }
                 button {
                     class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
@@ -541,6 +674,7 @@ fn VaultScreen(
                     aria_label: "Lock vault",
                     onclick: lock,
                     if settings().primary_action_display == PrimaryActionDisplay::Icons { "🔒" } else { "Lock" }
+                }
                 }
             }
 
@@ -800,6 +934,15 @@ fn VaultScreen(
                     settings,
                     on_close: move |_| show_settings.set(false),
                     on_error: move |message: String| save_error.set(Some(message)),
+                    on_sync: move |_| match sync_now() {
+                        Ok(message) => copy_timer.send(ToastCommand::Show(ToastState {
+                            id: 0,
+                            label: message,
+                            duration_ms: 5000,
+                            remaining_ms: 5000,
+                        })),
+                        Err(error) => save_error.set(Some(format!("Sync failed: {error}"))),
+                    },
                 }
             }
 
@@ -920,6 +1063,7 @@ fn SettingsDialog(
     settings: Signal<AppSettings>,
     on_close: EventHandler<()>,
     on_error: EventHandler<String>,
+    on_sync: EventHandler<()>,
 ) -> Element {
     let mut settings = settings;
     let mut active_section = use_signal(|| "general");
@@ -1056,6 +1200,21 @@ fn SettingsDialog(
                         option { value: "icons", "Compact icons" }
                     }
                 }
+                div { class: if active_section() == "appearance" { "settings-section settings-toggle active" } else { "settings-section settings-toggle" },
+                    div {
+                        label { "Show primary action icons" }
+                        p { class: "settings-help", "When disabled, primary action buttons are hidden from the toolbar." }
+                    }
+                    input {
+                        r#type: "checkbox",
+                        checked: settings().show_primary_action_icons,
+                        onchange: move |event| {
+                            let mut updated = settings();
+                            updated.show_primary_action_icons = event.value() == "true";
+                            save(updated);
+                        },
+                    }
+                }
                 div { class: if active_section() == "general" { "settings-section active" } else { "settings-section" },
                     label { "Clipboard timeout" }
                     p { class: "settings-help", "Copied credentials are cleared automatically after this time." }
@@ -1163,7 +1322,7 @@ fn SettingsDialog(
                 div { class: if active_section() == "sync" { "settings-section active" } else { "settings-section" },
                     label { "Vault synchronization" }
                     p { class: "settings-help", "Sync stays off until you enable it and choose a local folder." }
-                    div { class: "settings-section settings-toggle",
+                    div { class: "settings-toggle",
                         div {
                             label { "Enable sync" }
                             p { class: "settings-help", "Only encrypted vault data is written to the sync folder." }
@@ -1205,6 +1364,14 @@ fn SettingsDialog(
                         span { "Revision: {settings().sync_revision}" }
                         span { "Device: {settings().sync_device_id}" }
                         span { "Last sync: {last_sync}" }
+                    }
+                    button {
+                        class: "primary sync-now-button",
+                        title: "Sync vault",
+                        aria_label: "Sync vault",
+                        disabled: !settings().sync_enabled,
+                        onclick: move |_| on_sync.call(()),
+                        "Sync Now"
                     }
                 }
                     }

@@ -16,6 +16,8 @@ pub trait PlatformAdapterTrait {
     fn load_vault(&self) -> Result<Option<EncryptedBlob>, String>;
     fn save_vault(&self, blob: &EncryptedBlob) -> Result<(), String>;
     fn save_encrypted_backup(&self, blob: &EncryptedBlob) -> Result<PathBuf, String>;
+    fn choose_backup_file(&self) -> Result<Option<PathBuf>, String>;
+    fn load_backup_file(&self, path: &Path) -> Result<EncryptedBlob, String>;
     fn load_settings(&self) -> Result<AppSettings, String>;
     fn save_settings(&self, settings: &AppSettings) -> Result<(), String>;
     fn copy_text(&self, text: &str) -> Result<(), String>;
@@ -107,6 +109,36 @@ impl PlatformAdapterTrait for PlatformAdapter {
                 .map_err(|e| e.to_string()),
             PlatformKind::Web => {
                 Err("Web backup adapter not implemented in this repo yet".to_string())
+            }
+        }
+    }
+
+    fn choose_backup_file(&self) -> Result<Option<PathBuf>, String> {
+        match self.kind {
+            #[cfg(feature = "desktop")]
+            PlatformKind::Desktop => Ok(jpass_desktop::choose_backup_file()),
+            _ => Err("Backup file picker is not implemented for this platform".to_string()),
+        }
+    }
+
+    fn load_backup_file(&self, path: &Path) -> Result<EncryptedBlob, String> {
+        match self.kind {
+            #[cfg(feature = "desktop")]
+            PlatformKind::Desktop => jpass_desktop::desktop_store()
+                .load_encrypted_backup(path)
+                .map_err(|e| e.to_string()),
+            #[cfg(not(feature = "desktop"))]
+            PlatformKind::Desktop => {
+                Err("Desktop adapter is not enabled for this build".to_string())
+            }
+            PlatformKind::Android => jpass_android::android_store()
+                .load_encrypted_backup(path)
+                .map_err(|e| e.to_string()),
+            PlatformKind::Ios => jpass_ios::ios_store()
+                .load_encrypted_backup(path)
+                .map_err(|e| e.to_string()),
+            PlatformKind::Web => {
+                Err("Web backup loading is not implemented in this repo yet".to_string())
             }
         }
     }

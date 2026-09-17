@@ -59,6 +59,13 @@ pub fn choose_sync_folder() -> Option<PathBuf> {
         .pick_folder()
 }
 
+pub fn choose_backup_file() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .set_title("Choose JPass backup file")
+        .add_filter("JPass backup", &["json"])
+        .pick_file()
+}
+
 impl VaultStore for DesktopStore {
     type Error = PlatformError;
 
@@ -169,6 +176,13 @@ impl BackupService for DesktopStore {
         fs::write(&path, bytes)
             .map_err(|e| PlatformError::Storage(format!("failed to write backup: {e}")))?;
         Ok(path)
+    }
+
+    fn load_encrypted_backup(&self, path: &std::path::Path) -> Result<EncryptedBlob, Self::Error> {
+        let bytes = fs::read(path)
+            .map_err(|e| PlatformError::Storage(format!("failed to read backup file: {e}")))?;
+        serde_json::from_slice(&bytes)
+            .map_err(|e| PlatformError::Storage(format!("failed to parse backup file: {e}")))
     }
 }
 

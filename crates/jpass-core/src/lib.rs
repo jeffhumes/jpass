@@ -81,6 +81,8 @@ pub struct AppSettings {
     pub entry_action_display: EntryActionDisplay,
     #[serde(default)]
     pub primary_action_display: PrimaryActionDisplay,
+    #[serde(default = "default_true")]
+    pub show_primary_action_icons: bool,
     #[serde(default)]
     pub toast_position: ToastPosition,
     #[serde(default = "default_generator_length")]
@@ -131,6 +133,7 @@ impl Default for AppSettings {
             confirm_delete: true,
             entry_action_display: EntryActionDisplay::default(),
             primary_action_display: PrimaryActionDisplay::default(),
+            show_primary_action_icons: true,
             toast_position: ToastPosition::default(),
             generator_length: default_generator_length(),
             generator_lowercase: true,

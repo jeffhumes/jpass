@@ -54,6 +54,15 @@ impl BackupService for AndroidStore {
             "Android backup destination requires the native file picker binding".to_string(),
         ))
     }
+
+    fn load_encrypted_backup(
+        &self,
+        _path: &std::path::Path,
+    ) -> Result<EncryptedBlob, Self::Error> {
+        Err(PlatformError::Storage(
+            "Android backup loading requires the native file picker binding".to_string(),
+        ))
+    }
 }
 
 impl PlatformPaths for AndroidStore {

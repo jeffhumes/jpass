@@ -52,6 +52,15 @@ impl BackupService for IosStore {
             "iOS backup destination requires the native document picker binding".to_string(),
         ))
     }
+
+    fn load_encrypted_backup(
+        &self,
+        _path: &std::path::Path,
+    ) -> Result<EncryptedBlob, Self::Error> {
+        Err(PlatformError::Storage(
+            "iOS backup loading requires the native document picker binding".to_string(),
+        ))
+    }
 }
 
 impl PlatformPaths for IosStore {

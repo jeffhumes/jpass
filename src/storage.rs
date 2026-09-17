@@ -50,6 +50,20 @@ pub fn save_encrypted_backup(blob: &EncryptedBlob) -> Result<PathBuf, StorageErr
         .map_err(|e| StorageError::Backend(e.to_string()))
 }
 
+pub fn choose_backup_file() -> Result<Option<PathBuf>, StorageError> {
+    let adapter = PlatformAdapter::current();
+    adapter
+        .choose_backup_file()
+        .map_err(|e| StorageError::Backend(e.to_string()))
+}
+
+pub fn load_encrypted_backup(path: &Path) -> Result<EncryptedBlob, StorageError> {
+    let adapter = PlatformAdapter::current();
+    adapter
+        .load_backup_file(path)
+        .map_err(|e| StorageError::Backend(e.to_string()))
+}
+
 pub fn upload_sync(folder: &Path, envelope: &SyncEnvelope) -> Result<(), StorageError> {
     let adapter = PlatformAdapter::current();
     adapter

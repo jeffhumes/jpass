@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -126,6 +128,34 @@ impl Vault {
         Ok(folder)
     }
 
+    pub fn rename_folder(&mut self, folder_id: Uuid, new_name: &str) -> Result<(), String> {
+        let new_name = new_name.trim();
+        if new_name.is_empty() {
+            return Err("Folder name cannot be empty.".into());
+        }
+
+        let Some(folder) = self
+            .folders
+            .iter()
+            .position(|folder| folder.id == folder_id)
+        else {
+            return Err("Folder does not exist.".into());
+        };
+
+        let parent_id = self.folders[folder].parent_id;
+        if self.folders.iter().any(|candidate| {
+            candidate.id != folder_id
+                && candidate.parent_id == parent_id
+                && candidate.name.eq_ignore_ascii_case(new_name)
+        }) {
+            return Err("A folder with that name already exists here.".into());
+        }
+
+        self.folders[folder].name = new_name.to_string();
+        self.folders[folder].updated_at = chrono::Utc::now();
+        Ok(())
+    }
+
     pub fn folder_is_in_subtree(&self, folder_id: Uuid, ancestor_id: Uuid) -> bool {
         let mut current = Some(folder_id);
         while let Some(id) = current {
@@ -139,6 +169,31 @@ impl Vault {
                 .and_then(|folder| folder.parent_id);
         }
         false
+    }
+
+    pub fn delete_folder(&mut self, folder_id: Uuid) {
+        let mut pending = vec![folder_id];
+        let mut deleted_folders = HashSet::new();
+
+        while let Some(current_id) = pending.pop() {
+            if deleted_folders.insert(current_id) {
+                let children: Vec<Uuid> = self
+                    .folders
+                    .iter()
+                    .filter(|folder| folder.parent_id == Some(current_id))
+                    .map(|folder| folder.id)
+                    .collect();
+                pending.extend(children);
+            }
+        }
+
+        self.folders
+            .retain(|folder| !deleted_folders.contains(&folder.id));
+        self.entries.retain(|entry| {
+            !entry
+                .folder_id
+                .is_some_and(|id| deleted_folders.contains(&id))
+        });
     }
 
     pub fn move_entry_to_folder(&mut self, entry_id: Uuid, folder_id: Option<Uuid>) -> bool {
@@ -226,5 +281,57 @@ mod tests {
         assert!(vault.folder_is_in_subtree(finances.id, personal.id));
         assert!(vault.create_folder("Finances", Some(personal.id)).is_err());
         assert!(vault.create_folder("Finances", None).is_ok());
+    }
+
+    #[test]
+    fn vault_can_rename_folders() {
+        let mut vault = Vault::default();
+        let personal = vault.create_folder("Personal", None).unwrap();
+        let finances = vault.create_folder("Finances", Some(personal.id)).unwrap();
+        let banking = vault.create_folder("Banking", Some(personal.id)).unwrap();
+
+        assert!(vault.rename_folder(personal.id, "Work").is_ok());
+        assert!(vault.rename_folder(finances.id, "Banking").is_err());
+        assert!(vault.rename_folder(banking.id, "Savings").is_ok());
+
+        let updated_personal = vault
+            .folders
+            .iter()
+            .find(|folder| folder.id == personal.id)
+            .unwrap();
+        assert_eq!(updated_personal.name, "Work");
+    }
+
+    #[test]
+    fn vault_can_delete_folder_and_entries_in_it() {
+        let mut vault = Vault::default();
+        let personal = vault.create_folder("Personal", None).unwrap();
+        let finances = vault.create_folder("Finances", Some(personal.id)).unwrap();
+        let work = VaultEntry::new(
+            "GitHub".into(),
+            "alice".into(),
+            "secret".into(),
+            "https://github.com".into(),
+            "work".into(),
+        );
+        let mut bank = VaultEntry::new(
+            "Bank".into(),
+            "alice".into(),
+            "secret2".into(),
+            "https://bank.example".into(),
+            "finance".into(),
+        );
+        bank.folder_id = Some(finances.id);
+        vault.add_entry(work);
+        vault.add_entry(bank);
+
+        vault.delete_folder(personal.id);
+
+        assert!(!vault.folders.iter().any(|folder| folder.id == personal.id));
+        assert!(!vault.folders.iter().any(|folder| folder.id == finances.id));
+        assert!(vault
+            .entries
+            .iter()
+            .all(|entry| entry.folder_id != Some(finances.id)));
     }
 }

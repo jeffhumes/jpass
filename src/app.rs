@@ -276,14 +276,19 @@ fn VaultScreen(
     let mut editing = use_signal::<Option<VaultEntry>>(|| None);
     let mut show_editor = use_signal(|| false);
     let mut show_folder_modal = use_signal(|| false);
+    let mut show_folder_rename_modal = use_signal(|| false);
     let mut show_settings = use_signal(|| false);
     let mut show_generator = use_signal(|| false);
     let mut show_entry_generator = use_signal(|| false);
     let mut generated_entry_password = use_signal::<Option<String>>(|| None);
     let mut pending_delete = use_signal::<Option<VaultEntry>>(|| None);
+    let mut pending_folder_delete = use_signal::<Option<VaultFolder>>(|| None);
     let mut pending_move = use_signal::<Option<VaultEntry>>(|| None);
     let mut new_folder_name = use_signal(String::new);
     let mut new_folder_parent_id = use_signal(String::new);
+    let mut rename_folder_id = use_signal::<Option<Uuid>>(|| None);
+    let mut rename_folder_name = use_signal(String::new);
+    let mut folder_context_menu = use_signal::<Option<Uuid>>(|| None);
     let mut save_error = use_signal::<Option<String>>(|| None);
     let mut notification = use_signal::<Vec<ToastState>>(Vec::new);
     let mut settings = use_signal(|| storage::load_settings().unwrap_or_default());
@@ -344,6 +349,20 @@ fn VaultScreen(
                 Ok(()) => {
                     vault.set(Some(v));
                     save_error.set(None);
+                }
+                Err(error) => save_error.set(Some(error)),
+            }
+        }
+    };
+
+    let mut delete_folder = move |id: Uuid| {
+        if let Some(mut v) = vault() {
+            v.delete_folder(id);
+            match persist(&v) {
+                Ok(()) => {
+                    vault.set(Some(v));
+                    save_error.set(None);
+                    selected_folder.set(None);
                 }
                 Err(error) => save_error.set(Some(error)),
             }
@@ -832,6 +851,13 @@ fn VaultScreen(
                             div {
                                 class: if depth > 0 { "folder-tree-row nested" } else { "folder-tree-row" },
                                 style: "margin-left: {depth}rem",
+                                oncontextmenu: {
+                                    let id = folder.id;
+                                    move |_| {
+                                        selected_folder.set(Some(id));
+                                        folder_context_menu.set(Some(id));
+                                    }
+                                },
                                 if folder_has_children(&folders, folder.id) {
                                     button {
                                         class: "folder-expand-button",
@@ -859,6 +885,42 @@ fn VaultScreen(
                                         move |_| selected_folder.set(Some(id))
                                     },
                                     span { "{folder.name}" }
+                                }
+                                if folder_context_menu() == Some(folder.id) {
+                                    div { class: "folder-context-menu",
+                                        button {
+                                            class: "context-menu-item",
+                                            onclick: {
+                                                let folder_name = folder.name.clone();
+                                                let folder_id = folder.id;
+                                                move |_| {
+                                                    rename_folder_id.set(Some(folder_id));
+                                                    rename_folder_name.set(folder_name.clone());
+                                                    show_folder_rename_modal.set(true);
+                                                    folder_context_menu.set(None);
+                                                }
+                                            },
+                                            "Rename"
+                                        }
+                                        button {
+                                            class: "context-menu-item",
+                                            onclick: {
+                                                let folder = folder.clone();
+                                                move |_| {
+                                                    pending_folder_delete.set(Some(folder.clone()));
+                                                    folder_context_menu.set(None);
+                                                }
+                                            },
+                                            "Delete"
+                                        }
+                                        button {
+                                            class: "context-menu-item",
+                                            onclick: move |_| {
+                                                folder_context_menu.set(None);
+                                            },
+                                            "Close"
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1007,7 +1069,7 @@ fn VaultScreen(
                             value: "{new_folder_parent_id}",
                             onchange: move |event| new_folder_parent_id.set(event.value()),
                             option { value: "", "Top-level folder" }
-                            for (folder, depth) in folder_tree_for_select.clone() {
+                            for (folder, _depth) in folder_tree_for_select.clone() {
                                 option {
                                     value: "{folder.id}",
                                     "{folder_path(&folders, folder.id)}"
@@ -1068,6 +1130,75 @@ fn VaultScreen(
                                     }
                                 },
                                 "Create"
+                            }
+                        }
+                    }
+                }
+            }
+
+            if show_folder_rename_modal() {
+                div { class: "modal-backdrop",
+                    div { class: "modal",
+                        h2 { "Rename Folder" }
+                        label { "New folder name" }
+                        input {
+                            value: "{rename_folder_name}",
+                            oninput: move |e| rename_folder_name.set(e.value()),
+                            onkeydown: move |e| {
+                                if e.key() == Key::Enter {
+                                    if let Some(folder_id) = rename_folder_id() {
+                                        if let Some(mut v) = vault() {
+                                            let name = rename_folder_name();
+                                            match v.rename_folder(folder_id, &name) {
+                                                Ok(()) => match persist(&v) {
+                                                    Ok(()) => {
+                                                        vault.set(Some(v));
+                                                        save_error.set(None);
+                                                        show_folder_rename_modal.set(false);
+                                                        rename_folder_id.set(None);
+                                                        rename_folder_name.set(String::new());
+                                                    }
+                                                    Err(err) => save_error.set(Some(err)),
+                                                },
+                                                Err(err) => save_error.set(Some(err)),
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                        div { class: "modal-actions",
+                            button {
+                                onclick: move |_| {
+                                    show_folder_rename_modal.set(false);
+                                    rename_folder_id.set(None);
+                                    rename_folder_name.set(String::new());
+                                },
+                                "Cancel"
+                            }
+                            button {
+                                class: "primary",
+                                onclick: move |_| {
+                                    if let Some(folder_id) = rename_folder_id() {
+                                        if let Some(mut v) = vault() {
+                                            let name = rename_folder_name();
+                                            match v.rename_folder(folder_id, &name) {
+                                                Ok(()) => match persist(&v) {
+                                                    Ok(()) => {
+                                                        vault.set(Some(v));
+                                                        save_error.set(None);
+                                                        show_folder_rename_modal.set(false);
+                                                        rename_folder_id.set(None);
+                                                        rename_folder_name.set(String::new());
+                                                    }
+                                                    Err(err) => save_error.set(Some(err)),
+                                                },
+                                                Err(err) => save_error.set(Some(err)),
+                                            }
+                                        }
+                                    }
+                                },
+                                "Save"
                             }
                         }
                     }
@@ -1179,6 +1310,54 @@ fn VaultScreen(
                                             }));
                                         }
                                         Err(error) => save_error.set(Some(format!("Backup failed; entry was not deleted: {error}"))),
+                                    }
+                                },
+                                "Backup & Delete"
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(folder) = pending_folder_delete() {
+                div { class: "modal-backdrop",
+                    div { class: "modal confirmation-modal",
+                        span { class: "eyebrow danger-eyebrow", "DESTRUCTIVE ACTION" }
+                        h2 { "Delete folder?" }
+                        p { "This will permanently remove ", strong { "{folder.name}" }, " and all nested folders and entries inside it." }
+                        div { class: "modal-actions",
+                            button {
+                                class: "secondary-btn",
+                                onclick: move |_| pending_folder_delete.set(None),
+                                "Cancel"
+                            }
+                            button {
+                                class: "secondary-btn",
+                                onclick: {
+                                    let id = folder.id;
+                                    move |_| {
+                                        delete_folder(id);
+                                        pending_folder_delete.set(None);
+                                    }
+                                },
+                                "Delete without backup"
+                            }
+                            button {
+                                class: "primary",
+                                onclick: {
+                                    let id = folder.id;
+                                    move |_| match create_validated_backup() {
+                                        Ok(path) => {
+                                            delete_folder(id);
+                                            pending_folder_delete.set(None);
+                                            copy_timer.send(ToastCommand::Show(ToastState {
+                                                id: 0,
+                                                label: format!("Backup validated, then folder deleted: {path}"),
+                                                duration_ms: 5000,
+                                                remaining_ms: 5000,
+                                            }));
+                                        }
+                                        Err(error) => save_error.set(Some(format!("Backup failed; folder was not deleted: {error}"))),
                                     }
                                 },
                                 "Backup & Delete"
@@ -1622,7 +1801,7 @@ fn MoveEntryDialog(
                         value: "{folder_id}",
                         onchange: move |event| folder_id.set(event.value()),
                         option { value: "", "Unfiled" }
-                        for (folder, depth) in folder_tree {
+                        for (folder, _depth) in folder_tree {
                             option { value: "{folder.id}", "{folder_path(&folders, folder.id)}" }
                         }
                     }
@@ -1742,7 +1921,7 @@ fn EntryEditor(
                         value: "{folder_id}",
                         onchange: move |e| folder_id.set(e.value()),
                         option { value: "", "Unfiled" }
-                        for (folder, depth) in folder_tree {
+                        for (folder, _depth) in folder_tree {
                             option { value: "{folder.id}", "{folder_path(&folders, folder.id)}" }
                         }
                     }

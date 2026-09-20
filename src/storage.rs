@@ -36,11 +36,36 @@ pub fn load_encrypted() -> Result<Option<EncryptedBlob>, StorageError> {
         .map_err(|e| StorageError::Backend(e.to_string()))
 }
 
+pub fn load_encrypted_for_vault(vault_id: Option<&str>) -> Result<Option<EncryptedBlob>, StorageError> {
+    let adapter = PlatformAdapter::current();
+    adapter
+        .load_vault_for_id(vault_id)
+        .map_err(|e| StorageError::Backend(e.to_string()))
+}
+
 pub fn save_encrypted(blob: &EncryptedBlob) -> Result<(), StorageError> {
     let adapter = PlatformAdapter::current();
     adapter
         .save_vault(blob)
         .map_err(|e| StorageError::Backend(e.to_string()))
+}
+
+pub fn save_encrypted_for_vault(vault_id: Option<&str>, blob: &EncryptedBlob) -> Result<(), StorageError> {
+    let adapter = PlatformAdapter::current();
+    adapter
+        .save_vault_for_id(vault_id, blob)
+        .map_err(|e| StorageError::Backend(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vault_storage_uses_per_vault_file_names() {
+        assert_eq!(PlatformAdapter::current().vault_file_name(Some("primary")), "vault-primary.sqlite3");
+        assert_eq!(PlatformAdapter::current().vault_file_name(None), "vault.sqlite3");
+    }
 }
 
 pub fn save_encrypted_backup(blob: &EncryptedBlob) -> Result<PathBuf, StorageError> {

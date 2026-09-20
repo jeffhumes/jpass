@@ -15,6 +15,10 @@ pub enum PlatformKind {
 pub trait PlatformAdapterTrait {
     fn load_vault(&self) -> Result<Option<EncryptedBlob>, String>;
     fn save_vault(&self, blob: &EncryptedBlob) -> Result<(), String>;
+    fn load_vault_for_id(&self, vault_id: Option<&str>) -> Result<Option<EncryptedBlob>, String>;
+    fn save_vault_for_id(&self, vault_id: Option<&str>, blob: &EncryptedBlob)
+        -> Result<(), String>;
+    fn vault_file_name(&self, vault_id: Option<&str>) -> String;
     fn save_encrypted_backup(&self, blob: &EncryptedBlob) -> Result<PathBuf, String>;
     fn choose_backup_file(&self) -> Result<Option<PathBuf>, String>;
     fn load_backup_file(&self, path: &Path) -> Result<EncryptedBlob, String>;
@@ -42,15 +46,42 @@ impl PlatformAdapter {
     pub fn kind(&self) -> PlatformKind {
         self.kind
     }
+
+    pub fn vault_file_name(&self, vault_id: Option<&str>) -> String {
+        match vault_id {
+            Some(id) => {
+                let sanitized: String = id
+                    .chars()
+                    .filter(|ch| ch.is_ascii_alphanumeric() || matches!(*ch, '-' | '_'))
+                    .collect();
+                if sanitized.is_empty() {
+                    "vault.sqlite3".to_string()
+                } else {
+                    format!("vault-{sanitized}.sqlite3")
+                }
+            }
+            None => "vault.sqlite3".to_string(),
+        }
+    }
 }
 
 impl PlatformAdapterTrait for PlatformAdapter {
     fn load_vault(&self) -> Result<Option<EncryptedBlob>, String> {
+        PlatformAdapterTrait::load_vault_for_id(self, None)
+    }
+
+    fn save_vault(&self, blob: &EncryptedBlob) -> Result<(), String> {
+        PlatformAdapterTrait::save_vault_for_id(self, None, blob)
+    }
+
+    fn load_vault_for_id(&self, vault_id: Option<&str>) -> Result<Option<EncryptedBlob>, String> {
         match self.kind {
             #[cfg(feature = "desktop")]
             PlatformKind::Desktop => {
                 let store = jpass_desktop::desktop_store();
-                store.load_vault().map_err(|e| e.to_string())
+                store
+                    .load_vault_for_id(vault_id)
+                    .map_err(|e| e.to_string())
             }
             #[cfg(not(feature = "desktop"))]
             PlatformKind::Desktop => {
@@ -68,12 +99,18 @@ impl PlatformAdapterTrait for PlatformAdapter {
         }
     }
 
-    fn save_vault(&self, blob: &EncryptedBlob) -> Result<(), String> {
+    fn save_vault_for_id(
+        &self,
+        vault_id: Option<&str>,
+        blob: &EncryptedBlob,
+    ) -> Result<(), String> {
         match self.kind {
             #[cfg(feature = "desktop")]
             PlatformKind::Desktop => {
                 let store = jpass_desktop::desktop_store();
-                store.save_vault(blob).map_err(|e| e.to_string())
+                store
+                    .save_vault_for_id(vault_id, blob)
+                    .map_err(|e| e.to_string())
             }
             #[cfg(not(feature = "desktop"))]
             PlatformKind::Desktop => {
@@ -89,6 +126,10 @@ impl PlatformAdapterTrait for PlatformAdapter {
             }
             PlatformKind::Web => Err("Web adapter not implemented in this repo yet".to_string()),
         }
+    }
+
+    fn vault_file_name(&self, vault_id: Option<&str>) -> String {
+        PlatformAdapter::vault_file_name(self, vault_id)
     }
 
     fn save_encrypted_backup(&self, blob: &EncryptedBlob) -> Result<PathBuf, String> {

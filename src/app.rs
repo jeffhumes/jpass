@@ -5,7 +5,7 @@ use crate::{clipboard, storage};
 use dioxus::prelude::*;
 use jpass_core::{
     AppSettings, AppTheme, EditPasswordGenerationMode, EntryActionDisplay, PrimaryActionDisplay,
-    SyncEnvelope, ToastPosition,
+    SyncEnvelope, ToastPosition, VaultProfile,
 };
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -15,9 +15,79 @@ const MAIN_CSS: &str = include_str!("../assets/main.css");
 #[derive(Clone, Copy, PartialEq)]
 enum Screen {
     Loading,
+    SelectVault,
     CreateMaster,
     Unlock,
     Vault,
+}
+
+fn active_vault_id() -> Option<String> {
+    storage::load_settings()
+        .ok()
+        .and_then(|settings| settings.active_vault_id)
+}
+
+fn prepare_vault_startup(error: &mut Signal<Option<String>>) -> Screen {
+    let mut settings = storage::load_settings().unwrap_or_default();
+
+    if settings.vaults.is_empty() {
+        match storage::load_encrypted_for_vault(None) {
+            Ok(Some(blob)) => {
+                let vault_id = uuid::Uuid::new_v4().to_string();
+                settings.vaults.push(VaultProfile {
+                    id: vault_id.clone(),
+                    name: "Primary".to_string(),
+                });
+                settings.active_vault_id = Some(vault_id.clone());
+                settings.default_vault_id = Some(vault_id.clone());
+
+                if let Err(storage_error) =
+                    storage::save_encrypted_for_vault(Some(&vault_id), &blob)
+                        .and_then(|_| storage::save_settings(&settings))
+                {
+                    error.set(Some(format!(
+                        "Failed to migrate the existing vault: {storage_error}"
+                    )));
+                    return Screen::CreateMaster;
+                }
+            }
+            Ok(None) => return Screen::CreateMaster,
+            Err(storage_error) => {
+                error.set(Some(format!("Storage error: {storage_error}")));
+                return Screen::CreateMaster;
+            }
+        }
+    }
+
+    let default_is_valid = settings
+        .default_vault_id
+        .as_ref()
+        .is_some_and(|default_id| {
+            settings
+                .vaults
+                .iter()
+                .any(|profile| profile.id == *default_id)
+        });
+    if !default_is_valid {
+        settings.default_vault_id = settings
+            .active_vault_id
+            .as_ref()
+            .filter(|active_id| {
+                settings
+                    .vaults
+                    .iter()
+                    .any(|profile| profile.id == **active_id)
+            })
+            .cloned()
+            .or_else(|| settings.vaults.first().map(|profile| profile.id.clone()));
+        if let Err(storage_error) = storage::save_settings(&settings) {
+            error.set(Some(format!(
+                "Failed to save the default vault: {storage_error}"
+            )));
+        }
+    }
+
+    Screen::SelectVault
 }
 
 #[derive(Clone, Debug)]
@@ -117,17 +187,10 @@ pub fn App() -> Element {
     let master_password = use_signal::<Option<String>>(|| None);
     let mut error = use_signal::<Option<String>>(|| None);
 
-    // Decide which screen to show based on whether a vault already exists on disk.
+    // Resolve the active profile before showing the unlock screen.
     use_effect(move || {
         if matches!(screen(), Screen::Loading) {
-            match storage::load_encrypted() {
-                Ok(Some(_)) => screen.set(Screen::Unlock),
-                Ok(None) => screen.set(Screen::CreateMaster),
-                Err(e) => {
-                    error.set(Some(format!("Storage error: {e}")));
-                    screen.set(Screen::CreateMaster);
-                }
-            }
+            screen.set(prepare_vault_startup(&mut error));
         }
     });
 
@@ -137,6 +200,9 @@ pub fn App() -> Element {
         div { class: "app",
             match screen() {
                 Screen::Loading => rsx! { p { "Loading…" } },
+                Screen::SelectVault => rsx! {
+                    SelectVaultScreen { screen, vault, master_password, error }
+                },
                 Screen::CreateMaster => rsx! {
                     CreateMasterScreen { screen, vault, master_password, error }
                 },
@@ -152,12 +218,84 @@ pub fn App() -> Element {
 }
 
 #[component]
+fn SelectVaultScreen(
+    screen: Signal<Screen>,
+    vault: Signal<Option<Vault>>,
+    master_password: Signal<Option<String>>,
+    error: Signal<Option<String>>,
+) -> Element {
+    let mut settings = use_signal(|| storage::load_settings().unwrap_or_default());
+    let profile_list = settings().vaults.clone();
+
+    let mut choose = move |vault_id: String| {
+        let mut updated = settings();
+        updated.active_vault_id = Some(vault_id.clone());
+        if storage::save_settings(&updated).is_ok() {
+            settings.set(updated);
+            vault.set(None);
+            master_password.set(None);
+            screen.set(Screen::Unlock);
+        } else {
+            error.set(Some("Failed to save the selected vault.".into()));
+        }
+    };
+
+    let mut set_default = move |vault_id: String| {
+        let mut updated = settings();
+        updated.default_vault_id = Some(vault_id);
+        match storage::save_settings(&updated) {
+            Ok(()) => settings.set(updated),
+            Err(_) => error.set(Some("Failed to save the default vault.".into())),
+        }
+    };
+
+    rsx! {
+        div { class: "centered-card",
+            h1 { "Choose a vault" }
+            p { "Select which vault you want to unlock." }
+            div { class: "vault-picker-list",
+                for profile in profile_list {
+                    div { class: "vault-option",
+                        button {
+                            class: "secondary-btn",
+                            onclick: {
+                                let vault_id = profile.id.clone();
+                                move |_| choose(vault_id.clone())
+                            },
+                            "{profile.name}"
+                        }
+                        label {
+                            input {
+                                r#type: "radio",
+                                name: "default-vault",
+                                checked: settings().default_vault_id.as_deref() == Some(profile.id.as_str()),
+                                onchange: {
+                                    let vault_id = profile.id.clone();
+                                    move |_| set_default(vault_id.clone())
+                                },
+                            }
+                            " Default"
+                        }
+                    }
+                }
+            }
+            button {
+                class: "primary",
+                onclick: move |_| screen.set(Screen::CreateMaster),
+                "Create a new vault"
+            }
+        }
+    }
+}
+
+#[component]
 fn CreateMasterScreen(
     screen: Signal<Screen>,
     vault: Signal<Option<Vault>>,
     master_password: Signal<Option<String>>,
     error: Signal<Option<String>>,
 ) -> Element {
+    let mut vault_name = use_signal(String::new);
     let mut password = use_signal(String::new);
     let mut confirm = use_signal(String::new);
     let mut screen = screen;
@@ -177,12 +315,31 @@ fn CreateMasterScreen(
             error.set(Some("Passwords do not match.".into()));
             return;
         }
+        let name = vault_name().trim().to_string();
+        if name.is_empty() {
+            error.set(Some("Vault name cannot be empty.".into()));
+            return;
+        }
         let new_vault = Vault::default();
+        let mut settings = storage::load_settings().unwrap_or_default();
+        let vault_id = uuid::Uuid::new_v4().to_string();
+        settings.vaults.push(VaultProfile {
+            id: vault_id.clone(),
+            name,
+        });
+        settings.active_vault_id = Some(vault_id.clone());
+        if settings.default_vault_id.is_none() {
+            settings.default_vault_id = Some(vault_id.clone());
+        }
         let json = new_vault.to_json().expect("vault serializes");
         match crypto::encrypt(&json, &pw) {
             Ok(blob) => {
-                if let Err(e) = storage::save_encrypted(&blob) {
+                if let Err(e) = storage::save_encrypted_for_vault(Some(&vault_id), &blob) {
                     error.set(Some(format!("Failed to save vault: {e}")));
+                    return;
+                }
+                if let Err(e) = storage::save_settings(&settings) {
+                    error.set(Some(format!("Failed to save vault metadata: {e}")));
                     return;
                 }
                 vault.set(Some(new_vault));
@@ -197,7 +354,12 @@ fn CreateMasterScreen(
     rsx! {
         div { class: "centered-card",
             h1 { "Welcome to JPass" }
-            p { "Create a master password to protect your new vault." }
+            p { "Name your vault and create a master password to protect it." }
+            input {
+                placeholder: "Vault name",
+                value: "{vault_name}",
+                oninput: move |e| vault_name.set(e.value()),
+            }
             input {
                 r#type: "password",
                 placeholder: "Master password",
@@ -234,7 +396,10 @@ fn UnlockScreen(
 
     let mut submit = move || {
         let pw = password();
-        let blob: EncryptedBlob = match storage::load_encrypted() {
+        let active_id = storage::load_settings()
+            .ok()
+            .and_then(|settings| settings.active_vault_id.clone());
+        let blob: EncryptedBlob = match storage::load_encrypted_for_vault(active_id.as_deref()) {
             Ok(Some(b)) => b,
             Ok(None) => {
                 error.set(Some("No vault found.".into()));
@@ -312,6 +477,7 @@ fn VaultScreen(
     let mut save_error = use_signal::<Option<String>>(|| None);
     let mut notification = use_signal::<Vec<ToastState>>(Vec::new);
     let mut settings = use_signal(|| storage::load_settings().unwrap_or_default());
+    let mut show_vault_switcher = use_signal(|| false);
 
     let copy_timer = use_coroutine(
         move |mut commands: UnboundedReceiver<ToastCommand>| async move {
@@ -359,7 +525,8 @@ fn VaultScreen(
         };
         let json = v.to_json().map_err(|e| e.to_string())?;
         let blob = crypto::encrypt(&json, &pw).map_err(|_| "encryption failed".to_string())?;
-        storage::save_encrypted(&blob).map_err(|e| e.to_string())
+        let active_id = active_vault_id();
+        storage::save_encrypted_for_vault(active_id.as_deref(), &blob).map_err(|e| e.to_string())
     };
 
     let mut delete_entry = move |id: Uuid| {
@@ -501,7 +668,9 @@ fn VaultScreen(
                 .to_string()
         };
 
-        storage::save_encrypted(&blob).map_err(|e| e.to_string())?;
+        let active_id = active_vault_id();
+        storage::save_encrypted_for_vault(active_id.as_deref(), &blob)
+            .map_err(|e| e.to_string())?;
         vault.set(Some(restored_vault));
         Ok(Some(format!(
             "Restored backup {}; local backup: {backup_path}",
@@ -569,7 +738,9 @@ fn VaultScreen(
             .map_err(|_| "Restore failed: remote vault data is invalid.".to_string())?;
 
         let backup_path = create_validated_backup()?;
-        storage::save_encrypted(&remote.vault).map_err(|e| e.to_string())?;
+        let active_id = active_vault_id();
+        storage::save_encrypted_for_vault(active_id.as_deref(), &remote.vault)
+            .map_err(|e| e.to_string())?;
         vault.set(Some(restored_vault));
 
         let mut updated = current_settings;
@@ -612,6 +783,7 @@ fn VaultScreen(
                     show_folder_modal.set(true);
                 }
                 "settings" => show_settings.set(true),
+                "switch-vault" => show_vault_switcher.set(true),
                 "generator" => show_generator.set(true),
                 "backup" => match create_backup() {
                     Ok(path) => copy_timer.send(ToastCommand::Show(ToastState {
@@ -740,101 +912,101 @@ fn VaultScreen(
                         },
                         if settings().primary_action_display == PrimaryActionDisplay::Icons { "+" } else { "+ Add Entry" }
                     }
-                button {
-                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "icon-button primary-action" } else { "primary-action" },
-                    title: "New folder",
-                    aria_label: "New folder",
-                    onclick: move |_| {
-                        new_folder_name.set(String::new());
-                        new_folder_parent_id.set(String::new());
-                        show_folder_modal.set(true);
-                    },
-                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "📁+" } else { "+ New Folder" }
-                }
-                button {
-                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
-                    title: "Settings",
-                    aria_label: "Settings",
-                    onclick: move |_| show_settings.set(true),
-                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "⚙" } else { "Settings" }
-                }
-                button {
-                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
-                    title: "Password generator",
-                    aria_label: "Password generator",
-                    onclick: move |_| show_generator.set(true),
-                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "✦" } else { "Generator" }
-                }
-                button {
-                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
-                    title: "Create backup",
-                    aria_label: "Create backup",
-                    onclick: move |_| match create_backup() {
-                        Ok(path) => copy_timer.send(ToastCommand::Show(ToastState {
-                            id: 0,
-                            label: format!("Backup saved to {path}"),
-                            duration_ms: 5000,
-                            remaining_ms: 5000,
-                        })),
-                        Err(error) => save_error.set(Some(format!("Backup failed: {error}"))),
-                    },
-                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "📤" } else { "Backup" }
-                }
-                button {
-                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
-                    title: "Restore from backup file",
-                    aria_label: "Restore from backup file",
-                    onclick: move |_| match restore_from_backup() {
-                        Ok(Some(message)) => copy_timer.send(ToastCommand::Show(ToastState {
-                            id: 0,
-                            label: message,
-                            duration_ms: 7000,
-                            remaining_ms: 7000,
-                        })),
-                        Ok(None) => {}
-                        Err(error) => save_error.set(Some(error)),
-                    },
-                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "↥" } else { "Restore from File" }
-                }
-                if settings().sync_enabled {
                     button {
-                        class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action sync-now-button" } else { "secondary-btn primary-action sync-now-button" },
-                        title: "Sync vault",
-                        aria_label: "Sync vault",
-                        onclick: move |_| match sync_now() {
-                            Ok(message) => copy_timer.send(ToastCommand::Show(ToastState {
+                        class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "icon-button primary-action" } else { "primary-action" },
+                        title: "New folder",
+                        aria_label: "New folder",
+                        onclick: move |_| {
+                            new_folder_name.set(String::new());
+                            new_folder_parent_id.set(String::new());
+                            show_folder_modal.set(true);
+                        },
+                        if settings().primary_action_display == PrimaryActionDisplay::Icons { "📁+" } else { "+ New Folder" }
+                    }
+                    button {
+                        class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
+                        title: "Settings",
+                        aria_label: "Settings",
+                        onclick: move |_| show_settings.set(true),
+                        if settings().primary_action_display == PrimaryActionDisplay::Icons { "⚙" } else { "Settings" }
+                    }
+                    button {
+                        class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
+                        title: "Password generator",
+                        aria_label: "Password generator",
+                        onclick: move |_| show_generator.set(true),
+                        if settings().primary_action_display == PrimaryActionDisplay::Icons { "✦" } else { "Generator" }
+                    }
+                    button {
+                        class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
+                        title: "Create backup",
+                        aria_label: "Create backup",
+                        onclick: move |_| match create_backup() {
+                            Ok(path) => copy_timer.send(ToastCommand::Show(ToastState {
                                 id: 0,
-                                label: message,
+                                label: format!("Backup saved to {path}"),
                                 duration_ms: 5000,
                                 remaining_ms: 5000,
                             })),
-                            Err(error) => save_error.set(Some(format!("Sync failed: {error}"))),
+                            Err(error) => save_error.set(Some(format!("Backup failed: {error}"))),
                         },
-                        if settings().primary_action_display == PrimaryActionDisplay::Icons { "↻" } else { "Sync Now" }
+                        if settings().primary_action_display == PrimaryActionDisplay::Icons { "📤" } else { "Backup" }
                     }
-                }
-                button {
-                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
-                    title: "Download and restore vault",
-                    aria_label: "Download and restore vault",
-                    onclick: move |_| match restore_remote() {
-                        Ok(message) => copy_timer.send(ToastCommand::Show(ToastState {
-                            id: 0,
-                            label: message,
-                            duration_ms: 7000,
-                            remaining_ms: 7000,
-                        })),
-                        Err(error) => save_error.set(Some(error)),
-                    },
-                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "↓" } else { "Restore" }
-                }
-                button {
-                    class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "lock-btn icon-button primary-action" } else { "lock-btn primary-action" },
-                    title: "Lock vault",
-                    aria_label: "Lock vault",
-                    onclick: lock,
-                    if settings().primary_action_display == PrimaryActionDisplay::Icons { "🔒" } else { "Lock" }
-                }
+                    button {
+                        class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
+                        title: "Restore from backup file",
+                        aria_label: "Restore from backup file",
+                        onclick: move |_| match restore_from_backup() {
+                            Ok(Some(message)) => copy_timer.send(ToastCommand::Show(ToastState {
+                                id: 0,
+                                label: message,
+                                duration_ms: 7000,
+                                remaining_ms: 7000,
+                            })),
+                            Ok(None) => {}
+                            Err(error) => save_error.set(Some(error)),
+                        },
+                        if settings().primary_action_display == PrimaryActionDisplay::Icons { "↥" } else { "Restore from File" }
+                    }
+                    if settings().sync_enabled {
+                        button {
+                            class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action sync-now-button" } else { "secondary-btn primary-action sync-now-button" },
+                            title: "Sync vault",
+                            aria_label: "Sync vault",
+                            onclick: move |_| match sync_now() {
+                                Ok(message) => copy_timer.send(ToastCommand::Show(ToastState {
+                                    id: 0,
+                                    label: message,
+                                    duration_ms: 5000,
+                                    remaining_ms: 5000,
+                                })),
+                                Err(error) => save_error.set(Some(format!("Sync failed: {error}"))),
+                            },
+                            if settings().primary_action_display == PrimaryActionDisplay::Icons { "↻" } else { "Sync Now" }
+                        }
+                    }
+                    button {
+                        class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
+                        title: "Download and restore vault",
+                        aria_label: "Download and restore vault",
+                        onclick: move |_| match restore_remote() {
+                            Ok(message) => copy_timer.send(ToastCommand::Show(ToastState {
+                                id: 0,
+                                label: message,
+                                duration_ms: 7000,
+                                remaining_ms: 7000,
+                            })),
+                            Err(error) => save_error.set(Some(error)),
+                        },
+                        if settings().primary_action_display == PrimaryActionDisplay::Icons { "↓" } else { "Restore" }
+                    }
+                    button {
+                        class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "lock-btn icon-button primary-action" } else { "lock-btn primary-action" },
+                        title: "Lock vault",
+                        aria_label: "Lock vault",
+                        onclick: lock,
+                        if settings().primary_action_display == PrimaryActionDisplay::Icons { "🔒" } else { "Lock" }
+                    }
                 }
             }
 
@@ -1449,6 +1621,23 @@ fn VaultScreen(
                     },
                 }
             }
+
+            if show_vault_switcher() {
+                VaultSwitchDialog {
+                    settings: settings,
+                    on_close: move |_| show_vault_switcher.set(false),
+                    on_select: move |vault_id: String| {
+                        let mut updated = settings();
+                        updated.active_vault_id = Some(vault_id.clone());
+                        if storage::save_settings(&updated).is_ok() {
+                            vault.set(None);
+                            master_password.set(None);
+                            screen.set(Screen::Unlock);
+                        }
+                        show_vault_switcher.set(false);
+                    },
+                }
+            }
         }
     }
 }
@@ -1773,6 +1962,42 @@ fn SettingsDialog(
                 }
                 div { class: "modal-actions",
                     button { class: "primary", onclick: move |_| on_close.call(()), "Done" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn VaultSwitchDialog(
+    settings: Signal<AppSettings>,
+    on_close: EventHandler<()>,
+    on_select: EventHandler<String>,
+) -> Element {
+    let profiles = settings().vaults.clone();
+
+    rsx! {
+        div { class: "modal-backdrop",
+            div { class: "modal settings-modal",
+                div { class: "settings-heading",
+                    div {
+                        span { class: "eyebrow", "VAULTS" }
+                        h2 { "Switch vault" }
+                    }
+                    button {
+                        class: "modal-close",
+                        onclick: move |_| on_close.call(()),
+                        "×"
+                    }
+                }
+                div { class: "vault-picker-list",
+                    for profile in profiles {
+                        button {
+                            class: "secondary-btn vault-option",
+                            onclick: move |_| on_select.call(profile.id.clone()),
+                            "{profile.name}"
+                        }
+                    }
                 }
             }
         }

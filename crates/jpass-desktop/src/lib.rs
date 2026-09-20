@@ -70,54 +70,11 @@ impl VaultStore for DesktopStore {
     type Error = PlatformError;
 
     fn load_vault(&self) -> Result<Option<EncryptedBlob>, Self::Error> {
-        let path = self
-            .data_dir()
-            .map_err(|e| PlatformError::Path(e.to_string()))?
-            .join("vault.sqlite3");
-        let conn =
-            rusqlite::Connection::open(path).map_err(|e| PlatformError::Storage(e.to_string()))?;
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS vault_blob (id INTEGER PRIMARY KEY CHECK (id = 1), salt TEXT NOT NULL, nonce TEXT NOT NULL, ciphertext TEXT NOT NULL)",
-            [],
-        ).map_err(|e| PlatformError::Storage(e.to_string()))?;
-
-        let mut stmt = conn
-            .prepare("SELECT salt, nonce, ciphertext FROM vault_blob WHERE id = 1")
-            .map_err(|e| PlatformError::Storage(e.to_string()))?;
-        let mut rows = stmt
-            .query_map([], |row| {
-                Ok(EncryptedBlob {
-                    salt: row.get(0)?,
-                    nonce: row.get(1)?,
-                    ciphertext: row.get(2)?,
-                })
-            })
-            .map_err(|e| PlatformError::Storage(e.to_string()))?;
-
-        match rows.next() {
-            Some(row) => row
-                .map(Some)
-                .map_err(|e| PlatformError::Storage(e.to_string())),
-            None => Ok(None),
-        }
+        self.load_vault_for_id(None)
     }
 
     fn save_vault(&self, blob: &EncryptedBlob) -> Result<(), Self::Error> {
-        let path = self
-            .data_dir()
-            .map_err(|e| PlatformError::Path(e.to_string()))?
-            .join("vault.sqlite3");
-        let conn =
-            rusqlite::Connection::open(path).map_err(|e| PlatformError::Storage(e.to_string()))?;
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS vault_blob (id INTEGER PRIMARY KEY CHECK (id = 1), salt TEXT NOT NULL, nonce TEXT NOT NULL, ciphertext TEXT NOT NULL)",
-            [],
-        ).map_err(|e| PlatformError::Storage(e.to_string()))?;
-        conn.execute(
-            "INSERT INTO vault_blob (id, salt, nonce, ciphertext) VALUES (1, ?1, ?2, ?3) ON CONFLICT(id) DO UPDATE SET salt = excluded.salt, nonce = excluded.nonce, ciphertext = excluded.ciphertext",
-            (&blob.salt, &blob.nonce, &blob.ciphertext),
-        ).map_err(|e| PlatformError::Storage(e.to_string()))?;
-        Ok(())
+        self.save_vault_for_id(None, blob)
     }
 
     fn load_settings(&self) -> Result<AppSettings, Self::Error> {
@@ -145,11 +102,89 @@ impl VaultStore for DesktopStore {
 }
 
 impl DesktopStore {
+    pub fn load_vault_for_id(
+        &self,
+        vault_id: Option<&str>,
+    ) -> Result<Option<EncryptedBlob>, PlatformError> {
+        let path = self
+            .data_dir()
+            .map_err(|e| PlatformError::Path(e.to_string()))?
+            .join(vault_file_name(vault_id));
+        let conn =
+            rusqlite::Connection::open(path).map_err(|e| PlatformError::Storage(e.to_string()))?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS vault_blob (id INTEGER PRIMARY KEY CHECK (id = 1), salt TEXT NOT NULL, nonce TEXT NOT NULL, ciphertext TEXT NOT NULL)",
+            [],
+        )
+        .map_err(|e| PlatformError::Storage(e.to_string()))?;
+
+        let mut stmt = conn
+            .prepare("SELECT salt, nonce, ciphertext FROM vault_blob WHERE id = 1")
+            .map_err(|e| PlatformError::Storage(e.to_string()))?;
+        let mut rows = stmt
+            .query_map([], |row| {
+                Ok(EncryptedBlob {
+                    salt: row.get(0)?,
+                    nonce: row.get(1)?,
+                    ciphertext: row.get(2)?,
+                })
+            })
+            .map_err(|e| PlatformError::Storage(e.to_string()))?;
+
+        match rows.next() {
+            Some(row) => row
+                .map(Some)
+                .map_err(|e| PlatformError::Storage(e.to_string())),
+            None => Ok(None),
+        }
+    }
+
+    pub fn save_vault_for_id(
+        &self,
+        vault_id: Option<&str>,
+        blob: &EncryptedBlob,
+    ) -> Result<(), PlatformError> {
+        let path = self
+            .data_dir()
+            .map_err(|e| PlatformError::Path(e.to_string()))?
+            .join(vault_file_name(vault_id));
+        let conn =
+            rusqlite::Connection::open(path).map_err(|e| PlatformError::Storage(e.to_string()))?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS vault_blob (id INTEGER PRIMARY KEY CHECK (id = 1), salt TEXT NOT NULL, nonce TEXT NOT NULL, ciphertext TEXT NOT NULL)",
+            [],
+        )
+        .map_err(|e| PlatformError::Storage(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO vault_blob (id, salt, nonce, ciphertext) VALUES (1, ?1, ?2, ?3) ON CONFLICT(id) DO UPDATE SET salt = excluded.salt, nonce = excluded.nonce, ciphertext = excluded.ciphertext",
+            (&blob.salt, &blob.nonce, &blob.ciphertext),
+        )
+        .map_err(|e| PlatformError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
     fn settings_path(&self) -> Result<PathBuf, PlatformError> {
         Ok(self
             .config_dir()
             .map_err(|e| PlatformError::Path(e.to_string()))?
             .join("settings.json"))
+    }
+}
+
+fn vault_file_name(vault_id: Option<&str>) -> String {
+    match vault_id {
+        Some(id) => {
+            let sanitized: String = id
+                .chars()
+                .filter(|ch| ch.is_ascii_alphanumeric() || matches!(*ch, '-' | '_'))
+                .collect();
+            if sanitized.is_empty() {
+                "vault.sqlite3".to_string()
+            } else {
+                format!("vault-{sanitized}.sqlite3")
+            }
+        }
+        None => "vault.sqlite3".to_string(),
     }
 }
 

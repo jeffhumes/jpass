@@ -84,6 +84,12 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub show_primary_action_icons: bool,
     #[serde(default)]
+    pub vaults: Vec<VaultProfile>,
+    #[serde(default)]
+    pub active_vault_id: Option<String>,
+    #[serde(default)]
+    pub default_vault_id: Option<String>,
+    #[serde(default)]
     pub toast_position: ToastPosition,
     #[serde(default = "default_generator_length")]
     pub generator_length: usize,
@@ -134,6 +140,9 @@ impl Default for AppSettings {
             entry_action_display: EntryActionDisplay::default(),
             primary_action_display: PrimaryActionDisplay::default(),
             show_primary_action_icons: true,
+            vaults: Vec::new(),
+            active_vault_id: None,
+            default_vault_id: None,
             toast_position: ToastPosition::default(),
             generator_length: default_generator_length(),
             generator_lowercase: true,
@@ -150,9 +159,60 @@ impl Default for AppSettings {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_settings_tracks_multiple_vaults() {
+        let default_settings = AppSettings::default();
+        assert!(!default_settings.has_active_vault());
+
+        let primary = VaultProfile {
+            id: "vault-primary".to_string(),
+            name: "Primary".to_string(),
+        };
+        let work = VaultProfile {
+            id: "vault-work".to_string(),
+            name: "Work".to_string(),
+        };
+
+        let mut updated = AppSettings::default();
+        updated.vaults = vec![primary.clone(), work.clone()];
+        updated.active_vault_id = Some(primary.id.clone());
+        updated.default_vault_id = Some(primary.id.clone());
+
+        assert!(updated.has_active_vault());
+        assert_eq!(updated.vaults.len(), 2);
+        assert_eq!(
+            updated.active_vault_id.as_deref(),
+            Some(primary.id.as_str())
+        );
+    }
+}
+
 impl AppSettings {
     pub fn default_timeout() -> u64 {
         10
+    }
+
+    pub fn has_active_vault(&self) -> bool {
+        self.active_vault_id.is_some() || !self.vaults.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultProfile {
+    pub id: String,
+    pub name: String,
+}
+
+impl Default for VaultProfile {
+    fn default() -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            name: "Primary".to_string(),
+        }
     }
 }
 

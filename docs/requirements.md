@@ -23,7 +23,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 ## Vault and Data
 
 - Store more than username/password pairs, including SSH keys, API tokens, recovery codes, certificates, and other sensitive fields.
-- Support multiple separate vaults, let users choose a vault at startup, and allow switching between vaults through an application menu option.
+- [~] Support multiple separate vaults, let users name each vault, choose which vault to open at startup, mark one vault as the default, keep each vault profile and encrypted data separate, and allow switching between vaults through an application menu option; non-desktop platform adapters remain pending.
 - [~] Allow optional, user-controlled vault synchronization across supported platforms. Shared encrypted sync envelopes, a desktop local-folder provider, native desktop folder picker, Settings controls, Sync Now with remote-newer protection, and desktop remote restore are implemented; full conflict resolution and other transports remain pending.
 - [~] Support local vault export and backup. Encrypted desktop backups are implemented; native file destinations and additional export formats remain pending.
 - [~] Support restoring from a backup with validation before applying changes. Desktop local-file and sync-based restore now validate before replacement and create a safety backup; cherry-pick restore and other transports remain pending.

@@ -2372,12 +2372,12 @@ fn EntryEditor(
                             oninput: move |e| password.set(e.value()),
                         }
                         button {
-                            class: "password-visibility-button",
+                            class: if reveal() { "password-visibility-button visible" } else { "password-visibility-button hidden" },
                             r#type: "button",
                             title: if reveal() { "Hide password" } else { "Show password" },
                             aria_label: if reveal() { "Hide password" } else { "Show password" },
                             onclick: move |_| reveal.set(!reveal()),
-                            if reveal() { "👁" } else { "👁" }
+                            "👁"
                         }
                     }
                     button {

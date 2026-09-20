@@ -906,6 +906,17 @@ label {
   color: var(--accent);
 }
 
+.password-visibility-button.hidden::after {
+  background: currentColor;
+  content: "";
+  height: 2px;
+  left: 0.35rem;
+  position: absolute;
+  top: 50%;
+  transform: rotate(-45deg);
+  width: 1.3rem;
+}
+
 .folder-select-row {
   display: flex;
   align-items: center;

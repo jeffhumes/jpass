@@ -2365,13 +2365,23 @@ fn EntryEditor(
                 input { value: "{username}", oninput: move |e| username.set(e.value()) }
                 label { "Password" }
                 div { class: "password-row",
-                    input {
-                        r#type: if reveal() { "text" } else { "password" },
-                        value: "{password}",
-                        oninput: move |e| password.set(e.value()),
+                    div { class: "password-input-wrapper",
+                        input {
+                            r#type: if reveal() { "text" } else { "password" },
+                            value: "{password}",
+                            oninput: move |e| password.set(e.value()),
+                        }
+                        button {
+                            class: "password-visibility-button",
+                            r#type: "button",
+                            title: if reveal() { "Hide password" } else { "Show password" },
+                            aria_label: if reveal() { "Hide password" } else { "Show password" },
+                            onclick: move |_| reveal.set(!reveal()),
+                            if reveal() { "👁" } else { "👁" }
+                        }
                     }
-                    button { onclick: move |_| reveal.set(!reveal()), if reveal() { "Hide" } else { "Show" } }
                     button {
+                        r#type: "button",
                         onclick: move |_| {
                             if settings().edit_password_generation_mode == EditPasswordGenerationMode::FullGenerator {
                                 on_open_generator.call(());

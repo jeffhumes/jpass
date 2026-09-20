@@ -283,6 +283,7 @@ fn VaultScreen(
     let mut generated_entry_password = use_signal::<Option<String>>(|| None);
     let mut pending_delete = use_signal::<Option<VaultEntry>>(|| None);
     let mut pending_folder_delete = use_signal::<Option<VaultFolder>>(|| None);
+    let mut pending_folder_move = use_signal::<Option<VaultFolder>>(|| None);
     let mut pending_move = use_signal::<Option<VaultEntry>>(|| None);
     let mut new_folder_name = use_signal(String::new);
     let mut new_folder_parent_id = use_signal(String::new);
@@ -364,6 +365,21 @@ fn VaultScreen(
                     save_error.set(None);
                     selected_folder.set(None);
                 }
+                Err(error) => save_error.set(Some(error)),
+            }
+        }
+    };
+
+    let mut move_folder = move |folder_id: Uuid, new_parent_id: Option<Uuid>| {
+        if let Some(mut v) = vault() {
+            match v.move_folder(folder_id, new_parent_id) {
+                Ok(()) => match persist(&v) {
+                    Ok(()) => {
+                        vault.set(Some(v));
+                        save_error.set(None);
+                    }
+                    Err(error) => save_error.set(Some(error)),
+                },
                 Err(error) => save_error.set(Some(error)),
             }
         }
@@ -907,6 +923,17 @@ fn VaultScreen(
                                             onclick: {
                                                 let folder = folder.clone();
                                                 move |_| {
+                                                    pending_folder_move.set(Some(folder.clone()));
+                                                    folder_context_menu.set(None);
+                                                }
+                                            },
+                                            "Move"
+                                        }
+                                        button {
+                                            class: "context-menu-item",
+                                            onclick: {
+                                                let folder = folder.clone();
+                                                move |_| {
                                                     pending_folder_delete.set(Some(folder.clone()));
                                                     folder_context_menu.set(None);
                                                 }
@@ -1316,6 +1343,18 @@ fn VaultScreen(
                             }
                         }
                     }
+                }
+            }
+
+            if let Some(folder) = pending_folder_move() {
+                MoveFolderDialog {
+                    folder,
+                    folders: folders.clone(),
+                    on_cancel: move |_| pending_folder_move.set(None),
+                    on_move: move |(folder_id, parent_id)| {
+                        move_folder(folder_id, parent_id);
+                        pending_folder_move.set(None);
+                    },
                 }
             }
 
@@ -1771,6 +1810,66 @@ fn PasswordGeneratorDialog(
                     button { class: "primary", onclick: move |_| on_copy.call(generated()), "Copy" }
                     button { class: "primary", onclick: move |_| on_use.call(generated()), "Use password" }
                     button { class: "primary", onclick: move |_| on_close.call(()), "Done" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn MoveFolderDialog(
+    folder: VaultFolder,
+    folders: Vec<VaultFolder>,
+    on_cancel: EventHandler<()>,
+    on_move: EventHandler<(Uuid, Option<Uuid>)>,
+) -> Element {
+    let mut parent_id = use_signal(|| {
+        folder
+            .parent_id
+            .map(|id| id.to_string())
+            .unwrap_or_default()
+    });
+    let folder_tree = flatten_folder_tree(&folders);
+
+    let valid_destinations = folder_tree
+        .iter()
+        .filter(|(candidate, _)| candidate.id != folder.id)
+        .filter(|(candidate, _)| {
+            !folder_path(&folders, candidate.id).starts_with(&format!("{} / ", folder.name))
+        })
+        .collect::<Vec<_>>();
+
+    rsx! {
+        div { class: "modal-backdrop",
+            div { class: "modal move-modal",
+                span { class: "eyebrow", "ORGANIZE FOLDER" }
+                h2 { "Move folder" }
+                p { class: "settings-help", "Choose a new parent for ", strong { "{folder.name}" }, "." }
+                label { "Parent folder" }
+                select {
+                    value: "{parent_id}",
+                    onchange: move |event| parent_id.set(event.value()),
+                    option { value: "", "Top-level folder" }
+                    for (candidate, _depth) in valid_destinations.clone() {
+                        option { value: "{candidate.id}", "{folder_path(&folders, candidate.id)}" }
+                    }
+                }
+                div { class: "modal-actions",
+                    button {
+                        class: "secondary-btn",
+                        onclick: move |_| on_cancel.call(()),
+                        "Cancel"
+                    }
+                    button {
+                        class: "primary",
+                        onclick: {
+                            let folder_id = folder.id;
+                            move |_| {
+                                on_move.call((folder_id, Uuid::parse_str(&parent_id()).ok()));
+                            }
+                        },
+                        "Move folder"
+                    }
                 }
             }
         }

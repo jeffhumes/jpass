@@ -196,6 +196,52 @@ impl Vault {
         });
     }
 
+    pub fn move_folder(
+        &mut self,
+        folder_id: Uuid,
+        new_parent_id: Option<Uuid>,
+    ) -> Result<(), String> {
+        let Some(folder_index) = self
+            .folders
+            .iter()
+            .position(|folder| folder.id == folder_id)
+        else {
+            return Err("Folder does not exist.".into());
+        };
+
+        if let Some(parent_id) = new_parent_id {
+            if !self.folders.iter().any(|folder| folder.id == parent_id) {
+                return Err("Parent folder does not exist.".into());
+            }
+            if parent_id == folder_id || self.folder_is_in_subtree(parent_id, folder_id) {
+                return Err(
+                    "A folder cannot be moved into itself or one of its descendants.".into(),
+                );
+            }
+        }
+
+        let current_parent_id = self.folders[folder_index].parent_id;
+        let target_parent_id = new_parent_id;
+        let target_name = self.folders[folder_index].name.clone();
+
+        if self.folders.iter().any(|candidate| {
+            candidate.id != folder_id
+                && candidate.parent_id == target_parent_id
+                && candidate.name.eq_ignore_ascii_case(&target_name)
+        }) {
+            return Err("A folder with that name already exists here.".into());
+        }
+
+        self.folders[folder_index].parent_id = target_parent_id;
+        self.folders[folder_index].updated_at = Utc::now();
+
+        if current_parent_id == target_parent_id {
+            return Ok(());
+        }
+
+        Ok(())
+    }
+
     pub fn move_entry_to_folder(&mut self, entry_id: Uuid, folder_id: Option<Uuid>) -> bool {
         let Some(entry) = self.entries.iter_mut().find(|entry| entry.id == entry_id) else {
             return false;
@@ -300,6 +346,26 @@ mod tests {
             .find(|folder| folder.id == personal.id)
             .unwrap();
         assert_eq!(updated_personal.name, "Work");
+    }
+
+    #[test]
+    fn vault_can_move_folder_to_another_parent() {
+        let mut vault = Vault::default();
+        let personal = vault.create_folder("Personal", None).unwrap();
+        let finances = vault.create_folder("Finances", Some(personal.id)).unwrap();
+        let banking = vault.create_folder("Banking", Some(personal.id)).unwrap();
+
+        assert!(vault.move_folder(finances.id, None).is_ok());
+        assert_eq!(
+            vault
+                .folders
+                .iter()
+                .find(|folder| folder.id == finances.id)
+                .unwrap()
+                .parent_id,
+            None
+        );
+        assert!(vault.move_folder(personal.id, Some(banking.id)).is_err());
     }
 
     #[test]

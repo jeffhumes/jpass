@@ -76,6 +76,25 @@ fn folder_has_children(folders: &[VaultFolder], folder_id: Uuid) -> bool {
         .any(|folder| folder.parent_id == Some(folder_id))
 }
 
+fn folder_ancestors(folders: &[VaultFolder], folder_id: Uuid) -> Vec<Uuid> {
+    let mut ancestors = Vec::new();
+    let mut current = Some(folder_id);
+
+    while let Some(id) = current {
+        let Some(folder) = folders.iter().find(|folder| folder.id == id) else {
+            break;
+        };
+        if let Some(parent_id) = folder.parent_id {
+            ancestors.push(parent_id);
+            current = Some(parent_id);
+        } else {
+            break;
+        }
+    }
+
+    ancestors
+}
+
 fn folder_is_visible(folders: &[VaultFolder], folder_id: Uuid, expanded: &HashSet<Uuid>) -> bool {
     let Some(folder) = folders.iter().find(|folder| folder.id == folder_id) else {
         return false;
@@ -680,6 +699,19 @@ fn VaultScreen(
         if !expanded_initialized() && !folders.is_empty() {
             expanded_folders.set(folders.iter().map(|folder| folder.id).collect());
             expanded_initialized.set(true);
+        }
+
+        if let Some(folder_id) = selected_folder() {
+            if !folders.iter().any(|folder| folder.id == folder_id) {
+                selected_folder.set(None);
+                return;
+            }
+
+            let mut updated = expanded_folders();
+            for ancestor in folder_ancestors(&folders, folder_id) {
+                updated.insert(ancestor);
+            }
+            expanded_folders.set(updated);
         }
     });
     let expanded_snapshot = expanded_folders();
@@ -1873,6 +1905,23 @@ fn MoveFolderDialog(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[test]
+    fn folder_ancestors_include_parents_in_order() {
+        let root = VaultFolder::new_in_parent("Root".to_string(), None);
+        let child = VaultFolder::new_in_parent("Child".to_string(), Some(root.id));
+        let grandchild = VaultFolder::new_in_parent("Grandchild".to_string(), Some(child.id));
+        let folders = vec![root.clone(), child.clone(), grandchild.clone()];
+
+        let ancestors = folder_ancestors(&folders, grandchild.id);
+        assert_eq!(ancestors, vec![child.id, root.id]);
     }
 }
 

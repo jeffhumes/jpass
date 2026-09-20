@@ -478,6 +478,7 @@ fn VaultScreen(
     let mut notification = use_signal::<Vec<ToastState>>(Vec::new);
     let mut settings = use_signal(|| storage::load_settings().unwrap_or_default());
     let mut show_vault_switcher = use_signal(|| false);
+    let mut show_vault_rename = use_signal(|| false);
 
     let copy_timer = use_coroutine(
         move |mut commands: UnboundedReceiver<ToastCommand>| async move {
@@ -784,6 +785,7 @@ fn VaultScreen(
                 }
                 "settings" => show_settings.set(true),
                 "switch-vault" => show_vault_switcher.set(true),
+                "rename-vault" => show_vault_rename.set(true),
                 "generator" => show_generator.set(true),
                 "backup" => match create_backup() {
                     Ok(path) => copy_timer.send(ToastCommand::Show(ToastState {
@@ -1638,6 +1640,14 @@ fn VaultScreen(
                     },
                 }
             }
+
+            if show_vault_rename() {
+                VaultRenameDialog {
+                    settings,
+                    on_close: move |_| show_vault_rename.set(false),
+                    on_error: move |message: String| save_error.set(Some(message)),
+                }
+            }
         }
     }
 }
@@ -1994,9 +2004,103 @@ fn VaultSwitchDialog(
                     for profile in profiles {
                         button {
                             class: "secondary-btn vault-option",
-                            onclick: move |_| on_select.call(profile.id.clone()),
+                            onclick: {
+                                let vault_id = profile.id.clone();
+                                move |_| on_select.call(vault_id.clone())
+                            },
                             "{profile.name}"
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn VaultRenameDialog(
+    settings: Signal<AppSettings>,
+    on_close: EventHandler<()>,
+    on_error: EventHandler<String>,
+) -> Element {
+    let current_settings = settings();
+    let active_vault_id = current_settings.active_vault_id.clone();
+    let current_name = active_vault_id
+        .as_ref()
+        .and_then(|id| {
+            current_settings
+                .vaults
+                .iter()
+                .find(|profile| &profile.id == id)
+        })
+        .map(|profile| profile.name.clone())
+        .unwrap_or_default();
+    let mut name = use_signal(|| current_name);
+
+    let mut save = move || {
+        let Some(active_id) = settings().active_vault_id.clone() else {
+            on_error.call("No vault is currently open.".into());
+            return;
+        };
+        let name = name().trim().to_string();
+        if name.is_empty() {
+            on_error.call("Vault name cannot be empty.".into());
+            return;
+        }
+
+        let mut updated = settings();
+        let Some(profile) = updated
+            .vaults
+            .iter_mut()
+            .find(|profile| profile.id == active_id)
+        else {
+            on_error.call("The currently open vault could not be found.".into());
+            return;
+        };
+        profile.name = name;
+        match storage::save_settings(&updated) {
+            Ok(()) => {
+                settings.set(updated);
+                on_close.call(());
+            }
+            Err(error) => on_error.call(format!("Failed to rename vault: {error}")),
+        }
+    };
+
+    rsx! {
+        div { class: "modal-backdrop",
+            div { class: "modal settings-modal",
+                div { class: "settings-heading",
+                    div {
+                        span { class: "eyebrow", "VAULT" }
+                        h2 { "Rename vault" }
+                    }
+                    button {
+                        class: "modal-close",
+                        onclick: move |_| on_close.call(()),
+                        "×"
+                    }
+                }
+                label { "Vault name" }
+                input {
+                    value: "{name}",
+                    oninput: move |event| name.set(event.value()),
+                    onkeydown: move |event| {
+                        if event.key() == Key::Enter {
+                            save();
+                        }
+                    },
+                }
+                div { class: "modal-actions",
+                    button {
+                        class: "secondary-btn",
+                        onclick: move |_| on_close.call(()),
+                        "Cancel"
+                    }
+                    button {
+                        class: "primary",
+                        onclick: move |_| save(),
+                        "Save"
                     }
                 }
             }

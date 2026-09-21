@@ -186,6 +186,30 @@ button.lock-btn {
   font-size: 1rem;
 }
 
+.current-vault-name {
+  align-items: baseline;
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 0.55rem;
+  max-width: min(24rem, 32vw);
+  min-width: 0;
+  padding: 0 0.2rem;
+  white-space: nowrap;
+}
+
+.current-vault-label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.current-vault-value {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .clipboard-setting {
   display: flex;
   align-items: center;

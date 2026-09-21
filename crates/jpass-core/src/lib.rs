@@ -347,6 +347,10 @@ pub struct EncryptedBlob {
     pub salt: String,
     pub nonce: String,
     pub ciphertext: String,
+    #[serde(default)]
+    pub vault_id: Option<String>,
+    #[serde(default)]
+    pub vault_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

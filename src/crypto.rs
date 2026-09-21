@@ -79,6 +79,8 @@ pub fn encrypt(plaintext: &[u8], password: &str) -> Result<EncryptedBlob, Crypto
         salt: B64.encode(salt),
         nonce: B64.encode(nonce_bytes),
         ciphertext: B64.encode(ciphertext),
+        vault_id: None,
+        vault_name: None,
     })
 }
 

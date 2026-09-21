@@ -99,6 +99,10 @@ impl VaultStore for DesktopStore {
             .map_err(|e| PlatformError::Storage(format!("failed to write settings: {e}")))?;
         Ok(())
     }
+
+    fn delete_vault_for_id(&self, vault_id: Option<&str>) -> Result<(), Self::Error> {
+        DesktopStore::delete_vault_for_id(self, vault_id)
+    }
 }
 
 impl DesktopStore {
@@ -127,6 +131,8 @@ impl DesktopStore {
                     salt: row.get(0)?,
                     nonce: row.get(1)?,
                     ciphertext: row.get(2)?,
+                    vault_id: None,
+                    vault_name: None,
                 })
             })
             .map_err(|e| PlatformError::Storage(e.to_string()))?;
@@ -161,6 +167,20 @@ impl DesktopStore {
         )
         .map_err(|e| PlatformError::Storage(e.to_string()))?;
         Ok(())
+    }
+
+    pub fn delete_vault_for_id(&self, vault_id: Option<&str>) -> Result<(), PlatformError> {
+        let path = self
+            .data_dir()
+            .map_err(|e| PlatformError::Path(e.to_string()))?
+            .join(vault_file_name(vault_id));
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(PlatformError::Storage(format!(
+                "failed to delete vault: {error}"
+            ))),
+        }
     }
 
     fn settings_path(&self) -> Result<PathBuf, PlatformError> {
@@ -205,7 +225,16 @@ impl BackupService for DesktopStore {
             .map_err(|e| {
                 PlatformError::Storage(format!("failed to determine backup timestamp: {e}"))
             })?;
-        let path = backup_dir.join(format!("jpass-backup-{}.json", timestamp.as_millis()));
+        let name = blob
+            .vault_name
+            .as_deref()
+            .map(sanitize_backup_name)
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "vault".to_string());
+        let path = backup_dir.join(format!(
+            "jpass-backup-{name}-{}.json",
+            timestamp.as_millis()
+        ));
         let bytes = serde_json::to_vec_pretty(blob)
             .map_err(|e| PlatformError::Storage(format!("failed to serialize backup: {e}")))?;
         fs::write(&path, bytes)
@@ -219,6 +248,12 @@ impl BackupService for DesktopStore {
         serde_json::from_slice(&bytes)
             .map_err(|e| PlatformError::Storage(format!("failed to parse backup file: {e}")))
     }
+}
+
+fn sanitize_backup_name(name: &str) -> String {
+    name.chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(*ch, '-' | '_'))
+        .collect()
 }
 
 impl ClipboardService for DesktopStore {
@@ -297,6 +332,8 @@ mod sync_tests {
                 salt: "salt".into(),
                 nonce: "nonce".into(),
                 ciphertext: "ciphertext".into(),
+                vault_id: None,
+                vault_name: None,
             },
         );
 

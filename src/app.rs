@@ -27,6 +27,22 @@ fn active_vault_id() -> Option<String> {
         .and_then(|settings| settings.active_vault_id)
 }
 
+fn encrypt_vault_backup(
+    vault: &Vault,
+    password: &str,
+    settings: &AppSettings,
+) -> Result<EncryptedBlob, String> {
+    let json = vault.to_json().map_err(|e| e.to_string())?;
+    let mut blob = crypto::encrypt(&json, password).map_err(|_| "encryption failed".to_string())?;
+    blob.vault_id = settings.active_vault_id.clone();
+    blob.vault_name = settings
+        .active_vault_id
+        .as_ref()
+        .and_then(|id| settings.vaults.iter().find(|profile| &profile.id == id))
+        .map(|profile| profile.name.clone());
+    Ok(blob)
+}
+
 fn prepare_vault_startup(error: &mut Signal<Option<String>>) -> Screen {
     let mut settings = storage::load_settings().unwrap_or_default();
 
@@ -479,6 +495,7 @@ fn VaultScreen(
     let mut settings = use_signal(|| storage::load_settings().unwrap_or_default());
     let mut show_vault_switcher = use_signal(|| false);
     let mut show_vault_rename = use_signal(|| false);
+    let mut show_vault_delete = use_signal(|| false);
 
     let copy_timer = use_coroutine(
         move |mut commands: UnboundedReceiver<ToastCommand>| async move {
@@ -606,8 +623,7 @@ fn VaultScreen(
         let Some(current_vault) = vault() else {
             return Err("Vault is unavailable.".into());
         };
-        let json = current_vault.to_json().map_err(|e| e.to_string())?;
-        let blob = crypto::encrypt(&json, &pw).map_err(|_| "encryption failed".to_string())?;
+        let blob = encrypt_vault_backup(&current_vault, &pw, &settings())?;
         let path = storage::save_encrypted_backup(&blob).map_err(|e| e.to_string())?;
         Ok(path.display().to_string())
     };
@@ -620,7 +636,7 @@ fn VaultScreen(
             return Err("Vault is unavailable.".into());
         };
         let json = current_vault.to_json().map_err(|e| e.to_string())?;
-        let blob = crypto::encrypt(&json, &pw).map_err(|_| "encryption failed".to_string())?;
+        let blob = encrypt_vault_backup(&current_vault, &pw, &settings())?;
         let restored = crypto::decrypt(&blob, &pw).map_err(|_| {
             "backup validation failed: encrypted data could not be decrypted".to_string()
         })?;
@@ -646,13 +662,49 @@ fn VaultScreen(
         let restored_vault = Vault::from_json(&restored)
             .map_err(|_| "Restore failed: backup vault data is invalid.".to_string())?;
 
+        let current_settings = settings();
+        let active_id = current_settings.active_vault_id.clone();
+        let backup_id = blob.vault_id.clone();
+        if backup_id.is_some() && backup_id != active_id {
+            if current_settings
+                .vaults
+                .iter()
+                .any(|profile| Some(profile.id.clone()) == backup_id)
+            {
+                return Err("Restore failed: the backup belongs to another existing vault.".into());
+            }
+
+            let restored_id = uuid::Uuid::new_v4().to_string();
+            let restored_name = blob
+                .vault_name
+                .clone()
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| "Restored vault".to_string());
+            let mut restored_blob = blob;
+            restored_blob.vault_id = Some(restored_id.clone());
+            restored_blob.vault_name = Some(restored_name.clone());
+            storage::save_encrypted_for_vault(Some(&restored_id), &restored_blob)
+                .map_err(|e| format!("Restore failed: could not save the restored vault: {e}"))?;
+
+            let mut updated = current_settings;
+            updated.vaults.push(VaultProfile {
+                id: restored_id,
+                name: restored_name.clone(),
+            });
+            updated.active_vault_id = updated.vaults.last().map(|profile| profile.id.clone());
+            storage::save_settings(&updated)
+                .map_err(|e| format!("Restore failed: could not save restored vault metadata: {e}"))?;
+            settings.set(updated);
+            vault.set(Some(restored_vault));
+            return Ok(Some(format!("Restored deleted vault '{restored_name}'")));
+        }
+
         let backup_path = {
             let Some(current_vault) = vault() else {
                 return Err("Restore failed: vault is unavailable.".into());
             };
             let json = current_vault.to_json().map_err(|e| e.to_string())?;
-            let current_blob =
-                crypto::encrypt(&json, &password).map_err(|_| "encryption failed".to_string())?;
+            let current_blob = encrypt_vault_backup(&current_vault, &password, &current_settings)?;
             let validated = crypto::decrypt(&current_blob, &password)
                 .map_err(|_| "Restore failed: safety backup could not be validated.".to_string())?;
             let validated_vault = Vault::from_json(&validated).map_err(|_| {
@@ -669,7 +721,6 @@ fn VaultScreen(
                 .to_string()
         };
 
-        let active_id = active_vault_id();
         storage::save_encrypted_for_vault(active_id.as_deref(), &blob)
             .map_err(|e| e.to_string())?;
         vault.set(Some(restored_vault));
@@ -786,6 +837,7 @@ fn VaultScreen(
                 "settings" => show_settings.set(true),
                 "switch-vault" => show_vault_switcher.set(true),
                 "rename-vault" => show_vault_rename.set(true),
+                "delete-vault" => show_vault_delete.set(true),
                 "generator" => show_generator.set(true),
                 "backup" => match create_backup() {
                     Ok(path) => copy_timer.send(ToastCommand::Show(ToastState {
@@ -893,9 +945,23 @@ fn VaultScreen(
     let folder_tree = flatten_folder_tree(&folders);
     let folder_tree_for_select = folder_tree.clone();
     let notification_snapshot = notification();
+    let current_settings = settings();
+    let current_vault_name = current_settings
+        .active_vault_id
+        .as_ref()
+        .and_then(|id| current_settings.vaults.iter().find(|profile| &profile.id == id))
+        .map(|profile| profile.name.clone())
+        .unwrap_or_else(|| "Vault".to_string());
 
     rsx! {
         div { class: if settings().theme == AppTheme::Light { "vault-screen light-theme" } else { "vault-screen" },
+            div {
+                class: "current-vault-name",
+                title: "Currently open vault",
+                aria_label: "Currently open vault",
+                span { class: "current-vault-label", "Vault" }
+                span { class: "current-vault-value", "{current_vault_name}" }
+            }
             div { class: "toolbar",
                 input {
                     class: "search",
@@ -1632,6 +1698,7 @@ fn VaultScreen(
                         let mut updated = settings();
                         updated.active_vault_id = Some(vault_id.clone());
                         if storage::save_settings(&updated).is_ok() {
+                            settings.set(updated);
                             vault.set(None);
                             master_password.set(None);
                             screen.set(Screen::Unlock);
@@ -1646,6 +1713,49 @@ fn VaultScreen(
                     settings,
                     on_close: move |_| show_vault_rename.set(false),
                     on_error: move |message: String| save_error.set(Some(message)),
+                }
+            }
+
+            if show_vault_delete() {
+                VaultDeleteDialog {
+                    settings,
+                    on_close: move |_| show_vault_delete.set(false),
+                    on_delete: move |()| {
+                        let current_settings = settings();
+                        if current_settings.vaults.len() <= 1 {
+                            save_error.set(Some("The last vault cannot be deleted.".into()));
+                            return;
+                        }
+                        let Some(active_id) = current_settings.active_vault_id.clone() else {
+                            save_error.set(Some("No vault is currently open.".into()));
+                            return;
+                        };
+                        match create_validated_backup() {
+                            Ok(path) => {
+                                if let Err(error) = storage::delete_vault_for_id(Some(&active_id)) {
+                                    save_error.set(Some(format!("Vault was not deleted; backup saved to {path}: {error}")));
+                                    return;
+                                }
+                                let mut updated = current_settings;
+                                updated.vaults.retain(|profile| profile.id != active_id);
+                                updated.active_vault_id = None;
+                                if updated.default_vault_id.as_deref() == Some(active_id.as_str()) {
+                                    updated.default_vault_id = updated.vaults.first().map(|profile| profile.id.clone());
+                                }
+                                match storage::save_settings(&updated) {
+                                    Ok(()) => {
+                                        settings.set(updated);
+                                        vault.set(None);
+                                        master_password.set(None);
+                                        show_vault_delete.set(false);
+                                        screen.set(Screen::SelectVault);
+                                    }
+                                    Err(error) => save_error.set(Some(format!("Vault data was deleted and backup saved to {path}, but metadata could not be saved: {error}"))),
+                                }
+                            }
+                            Err(error) => save_error.set(Some(format!("Vault was not deleted because backup validation failed: {error}"))),
+                        }
+                    },
                 }
             }
         }
@@ -2101,6 +2211,49 @@ fn VaultRenameDialog(
                         class: "primary",
                         onclick: move |_| save(),
                         "Save"
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn VaultDeleteDialog(
+    settings: Signal<AppSettings>,
+    on_close: EventHandler<()>,
+    on_delete: EventHandler<()>,
+) -> Element {
+    let current_settings = settings();
+    let current_name = current_settings
+        .active_vault_id
+        .as_ref()
+        .and_then(|id| {
+            current_settings
+                .vaults
+                .iter()
+                .find(|profile| &profile.id == id)
+        })
+        .map(|profile| profile.name.clone())
+        .unwrap_or_else(|| "current vault".to_string());
+
+    rsx! {
+        div { class: "modal-backdrop",
+            div { class: "modal confirmation-modal",
+                span { class: "eyebrow danger-eyebrow", "DESTRUCTIVE ACTION" }
+                h2 { "Delete vault?" }
+                p { "This will permanently delete ", strong { "{current_name}" }, " and all of its entries and folders." }
+                p { class: "settings-help", "A validated encrypted backup will be created before deletion. The last remaining vault cannot be deleted." }
+                div { class: "modal-actions",
+                    button {
+                        class: "secondary-btn",
+                        onclick: move |_| on_close.call(()),
+                        "Cancel"
+                    }
+                    button {
+                        class: "primary danger",
+                        onclick: move |_| on_delete.call(()),
+                        "Backup & Delete Vault"
                     }
                 }
             }

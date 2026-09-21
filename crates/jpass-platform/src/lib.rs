@@ -8,6 +8,7 @@ pub trait VaultStore {
     fn save_vault(&self, blob: &EncryptedBlob) -> Result<(), Self::Error>;
     fn load_settings(&self) -> Result<AppSettings, Self::Error>;
     fn save_settings(&self, settings: &AppSettings) -> Result<(), Self::Error>;
+    fn delete_vault_for_id(&self, vault_id: Option<&str>) -> Result<(), Self::Error>;
 }
 
 pub trait BackupService {

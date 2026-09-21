@@ -30,6 +30,7 @@ fn native_menu() -> dioxus::desktop::muda::Menu {
         &MenuItem::with_id("settings", "Settings", true, None),
         &MenuItem::with_id("switch-vault", "Switch Vault", true, None),
         &MenuItem::with_id("rename-vault", "Rename Vault", true, None),
+        &MenuItem::with_id("delete-vault", "Delete Vault", true, None),
         &MenuItem::with_id("generator", "Generator", true, None),
     ])
     .expect("failed to build Edit / Settings menu");

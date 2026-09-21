@@ -24,6 +24,7 @@ pub trait PlatformAdapterTrait {
     fn load_backup_file(&self, path: &Path) -> Result<EncryptedBlob, String>;
     fn load_settings(&self) -> Result<AppSettings, String>;
     fn save_settings(&self, settings: &AppSettings) -> Result<(), String>;
+    fn delete_vault_for_id(&self, vault_id: Option<&str>) -> Result<(), String>;
     fn copy_text(&self, text: &str) -> Result<(), String>;
     fn clear(&self) -> Result<(), String>;
     fn upload_sync(&self, folder: &Path, envelope: &SyncEnvelope) -> Result<(), String>;
@@ -125,6 +126,22 @@ impl PlatformAdapterTrait for PlatformAdapter {
                 store.save_vault(blob).map_err(|e| e.to_string())
             }
             PlatformKind::Web => Err("Web adapter not implemented in this repo yet".to_string()),
+        }
+    }
+
+    fn delete_vault_for_id(&self, vault_id: Option<&str>) -> Result<(), String> {
+        match self.kind {
+            #[cfg(feature = "desktop")]
+            PlatformKind::Desktop => jpass_desktop::desktop_store()
+                .delete_vault_for_id(vault_id)
+                .map_err(|e| e.to_string()),
+            #[cfg(not(feature = "desktop"))]
+            PlatformKind::Desktop => {
+                Err("Desktop adapter is not enabled for this build".to_string())
+            }
+            PlatformKind::Android => Err("Vault deletion is not implemented for Android".into()),
+            PlatformKind::Ios => Err("Vault deletion is not implemented for iOS".into()),
+            PlatformKind::Web => Err("Vault deletion is not implemented for web".into()),
         }
     }
 

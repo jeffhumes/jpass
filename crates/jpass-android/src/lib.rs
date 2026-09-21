@@ -28,6 +28,12 @@ impl VaultStore for AndroidStore {
     fn save_settings(&self, _settings: &AppSettings) -> Result<(), Self::Error> {
         Ok(())
     }
+
+    fn delete_vault_for_id(&self, _vault_id: Option<&str>) -> Result<(), Self::Error> {
+        Err(PlatformError::Storage(
+            "Android vault deletion is not implemented yet".to_string(),
+        ))
+    }
 }
 
 impl ClipboardService for AndroidStore {

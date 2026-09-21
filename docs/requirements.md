@@ -101,7 +101,7 @@ Existing requirements without a marker are treated as planned until explicitly r
 - [x] Copy username/password toast notifications show a working countdown and automatically clear the clipboard when the timer expires.
 - [x] Toast notifications are stackable so rapid actions such as Copy User followed by Copy Password display simultaneously with independent countdowns.
 - [x] Allow users to choose the toast-notification position in Settings: any display corner, top-center, center, or bottom-center.
-- Deferred Linux issue: investigate why the GTK/WebKit desktop build may render but not accept clicks in the master-password field or buttons. Current startup workarounds disable WebKit DMA-BUF/compositing, use software GL, and disable Dioxus debug always-on-top; a native Linux renderer or deeper GTK/WebKit investigation may be needed.
+- [x] Fixed Linux GTK/WebKit desktop build not accepting clicks: an overly broad `body > div` CSS rule was unintentionally stretching Dioxus's internal dev-mode hot-reload toast overlay to cover the full window with a very high z-index, silently intercepting all clicks. Scoped the rule to `#main` only. Startup workarounds for WebKit DMA-BUF/compositing and software GL rendering remain in place for stability but are no longer required for click handling.
 
 ## Phase 2 Security Monitoring
 

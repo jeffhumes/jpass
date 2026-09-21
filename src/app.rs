@@ -213,7 +213,8 @@ pub fn App() -> Element {
     rsx! {
         document::Title { "JPass" }
         style { {MAIN_CSS} }
-        div { class: "app",
+        div {
+            class: "app",
             match screen() {
                 Screen::Loading => rsx! { p { "Loading…" } },
                 Screen::SelectVault => rsx! {
@@ -692,8 +693,9 @@ fn VaultScreen(
                 name: restored_name.clone(),
             });
             updated.active_vault_id = updated.vaults.last().map(|profile| profile.id.clone());
-            storage::save_settings(&updated)
-                .map_err(|e| format!("Restore failed: could not save restored vault metadata: {e}"))?;
+            storage::save_settings(&updated).map_err(|e| {
+                format!("Restore failed: could not save restored vault metadata: {e}")
+            })?;
             settings.set(updated);
             vault.set(Some(restored_vault));
             return Ok(Some(format!("Restored deleted vault '{restored_name}'")));
@@ -949,7 +951,12 @@ fn VaultScreen(
     let current_vault_name = current_settings
         .active_vault_id
         .as_ref()
-        .and_then(|id| current_settings.vaults.iter().find(|profile| &profile.id == id))
+        .and_then(|id| {
+            current_settings
+                .vaults
+                .iter()
+                .find(|profile| &profile.id == id)
+        })
         .map(|profile| profile.name.clone())
         .unwrap_or_else(|| "Vault".to_string());
 

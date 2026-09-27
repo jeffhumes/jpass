@@ -20,7 +20,7 @@ fn native_menu() -> dioxus::desktop::muda::Menu {
         &MenuItem::with_id("add-entry", "Add Entry", true, None),
         &MenuItem::with_id("new-folder", "New Folder", true, None),
         &MenuItem::with_id("backup", "Backup", true, None),
-        &MenuItem::with_id("restore-file", "Restore from File", true, None),
+        &MenuItem::with_id("restore-file", "Restore", true, None),
         &MenuItem::with_id("sync-now", "Sync Now", true, None),
         &MenuItem::with_id("restore", "Restore", true, None),
         &MenuItem::with_id("lock", "Lock", true, None),

@@ -80,7 +80,13 @@ pub fn encrypt_with_aad(
     let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(key_bytes));
     let nonce = Nonce::from(nonce_bytes);
     let ciphertext = cipher
-        .encrypt(&nonce, Payload { msg: plaintext, aad })
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
         .map_err(|_| CryptoError::Encryption)?;
     key_bytes.zeroize();
 
@@ -193,8 +199,8 @@ mod tests {
 
     #[test]
     fn authenticated_data_is_required_for_decryption() {
-        let blob = encrypt_with_aad(b"sensitive vault data", "strong test password", b"header")
-            .unwrap();
+        let blob =
+            encrypt_with_aad(b"sensitive vault data", "strong test password", b"header").unwrap();
 
         assert_eq!(
             decrypt_with_aad(&blob, "strong test password", b"header").unwrap(),

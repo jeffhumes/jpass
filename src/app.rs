@@ -7,7 +7,7 @@ use jpass_core::{
     AppSettings, AppTheme, EditPasswordGenerationMode, EntryActionDisplay, PrimaryActionDisplay,
     SyncEnvelope, ToastPosition, VaultProfile,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 const MAIN_CSS: &str = include_str!("../assets/main.css");
@@ -227,6 +227,62 @@ enum ToastCommand {
     Cancel(u64),
 }
 
+#[derive(Clone)]
+struct CherryPickData {
+    source: Vault,
+    selected_folders: HashSet<Uuid>,
+    selected_entries: HashSet<Uuid>,
+}
+
+fn merge_cherry_picked(
+    current: &Vault,
+    source: &Vault,
+    selected_folders: &HashSet<Uuid>,
+    selected_entries: &HashSet<Uuid>,
+) -> Result<Vault, String> {
+    let mut merged = current.clone();
+    let mut folder_ids = HashMap::new();
+    let mut pending_folders: Vec<&VaultFolder> = source
+        .folders
+        .iter()
+        .filter(|folder| selected_folders.contains(&folder.id))
+        .collect();
+
+    while !pending_folders.is_empty() {
+        let mut progressed = false;
+        pending_folders.retain(|folder| {
+            if let Some(parent_id) = folder.parent_id {
+                if selected_folders.contains(&parent_id) && !folder_ids.contains_key(&parent_id) {
+                    return true;
+                }
+            }
+            let parent_id = folder.parent_id.and_then(|id| folder_ids.get(&id).copied());
+            let new_folder = VaultFolder::new_in_parent(folder.name.clone(), parent_id);
+            folder_ids.insert(folder.id, new_folder.id);
+            merged.folders.push(new_folder);
+            progressed = true;
+            false
+        });
+        if !progressed {
+            return Err("Restore failed: selected folder hierarchy is invalid.".into());
+        }
+    }
+
+    for entry in &source.entries {
+        if !selected_entries.contains(&entry.id) {
+            continue;
+        }
+        let mut restored = entry.clone();
+        restored.id = Uuid::new_v4();
+        restored.folder_id = entry.folder_id.and_then(|id| folder_ids.get(&id).copied());
+        restored.created_at = chrono::Utc::now();
+        restored.updated_at = restored.created_at;
+        merged.entries.push(restored);
+    }
+
+    Ok(merged)
+}
+
 #[allow(non_snake_case)]
 pub fn App() -> Element {
     let mut screen = use_signal(|| Screen::Loading);
@@ -438,6 +494,7 @@ fn UnlockScreen(
     error: Signal<Option<String>>,
 ) -> Element {
     let mut password = use_signal(String::new);
+    let mut reveal = use_signal(|| false);
     let mut screen = screen;
     let mut vault = vault;
     let mut master_password = master_password;
@@ -477,13 +534,23 @@ fn UnlockScreen(
         div { class: "centered-card",
             h1 { "JPass" }
             p { "Enter your master password to unlock the vault." }
-            input {
-                r#type: "password",
-                placeholder: "Master password",
-                value: "{password}",
-                oninput: move |e| password.set(e.value()),
-                onkeydown: move |e| { if e.key() == Key::Enter { submit(); } },
-                autofocus: true,
+            div { class: "password-input-wrapper",
+                input {
+                    r#type: if reveal() { "text" } else { "password" },
+                    placeholder: "Master password",
+                    value: "{password}",
+                    oninput: move |e| password.set(e.value()),
+                    onkeydown: move |e| { if e.key() == Key::Enter { submit(); } },
+                    autofocus: true,
+                }
+                button {
+                    class: if reveal() { "password-visibility-button visible" } else { "password-visibility-button hidden" },
+                    r#type: "button",
+                    title: if reveal() { "Hide password" } else { "Show password" },
+                    aria_label: if reveal() { "Hide password" } else { "Show password" },
+                    onclick: move |_| reveal.set(!reveal()),
+                    "👁"
+                }
             }
             if let Some(msg) = error() {
                 p { class: "error", "{msg}" }
@@ -529,6 +596,8 @@ fn VaultScreen(
     let mut show_vault_switcher = use_signal(|| false);
     let mut show_vault_rename = use_signal(|| false);
     let mut show_vault_delete = use_signal(|| false);
+    let mut show_restore_options = use_signal(|| false);
+    let mut cherry_pick = use_signal::<Option<CherryPickData>>(|| None);
 
     let copy_timer = use_coroutine(
         move |mut commands: UnboundedReceiver<ToastCommand>| async move {
@@ -725,10 +794,8 @@ fn VaultScreen(
             let mut restored_blob = blob;
             restored_blob.vault_id = Some(restored_id.clone());
             restored_blob.vault_name = Some(restored_name.clone());
-            let mut storage_blob =
-                crypto::encrypt(&restored, &password).map_err(|_| {
-                    "Restore failed: could not prepare the restored vault.".to_string()
-                })?;
+            let mut storage_blob = crypto::encrypt(&restored, &password)
+                .map_err(|_| "Restore failed: could not prepare the restored vault.".to_string())?;
             storage_blob.vault_id = restored_blob.vault_id.clone();
             storage_blob.vault_name = restored_blob.vault_name.clone();
             storage::save_encrypted_for_vault(Some(&restored_id), &storage_blob)
@@ -789,6 +856,62 @@ fn VaultScreen(
         )))
     };
 
+    let mut open_cherry_pick = move || -> Result<(), String> {
+        let Some(path) = storage::choose_backup_file().map_err(|e| e.to_string())? else {
+            return Ok(());
+        };
+        let Some(password) = master_password() else {
+            return Err("Cherry-pick restore failed: vault is locked.".into());
+        };
+        let blob = storage::load_encrypted_backup(&path).map_err(|e| e.to_string())?;
+        let context = backup_context(&blob)?;
+        let restored = crypto::decrypt_with_aad(&blob, &password, &context)
+            .or_else(|_| crypto::decrypt(&blob, &password))
+            .map_err(|_| {
+                "Cherry-pick restore failed: backup could not be decrypted.".to_string()
+            })?;
+        let source = Vault::from_json(&restored)
+            .map_err(|_| "Cherry-pick restore failed: backup data is invalid.".to_string())?;
+        cherry_pick.set(Some(CherryPickData {
+            selected_folders: source.folders.iter().map(|folder| folder.id).collect(),
+            selected_entries: source.entries.iter().map(|entry| entry.id).collect(),
+            source,
+        }));
+        Ok(())
+    };
+
+    let mut apply_cherry_pick = move || -> Result<String, String> {
+        let Some(selection) = cherry_pick() else {
+            return Err("No backup content selected.".into());
+        };
+        if selection.selected_folders.is_empty() && selection.selected_entries.is_empty() {
+            return Err("Select at least one folder or entry to restore.".into());
+        }
+        let Some(current) = vault() else {
+            return Err("Cherry-pick restore failed: vault is unavailable.".into());
+        };
+        let merged = merge_cherry_picked(
+            &current,
+            &selection.source,
+            &selection.selected_folders,
+            &selection.selected_entries,
+        )?;
+        let merged_json = merged
+            .to_json()
+            .map_err(|_| "Cherry-pick restore failed: merged vault is invalid.".to_string())?;
+        Vault::from_json(&merged_json)
+            .map_err(|_| "Cherry-pick restore failed: merged vault is invalid.".to_string())?;
+        let backup_path = create_validated_backup()?;
+        persist(&merged)?;
+        let folder_count = merged.folders.len().saturating_sub(current.folders.len());
+        let entry_count = merged.entries.len().saturating_sub(current.entries.len());
+        vault.set(Some(merged));
+        cherry_pick.set(None);
+        Ok(format!(
+            "Restored {entry_count} entries and {folder_count} folders; local backup: {backup_path}"
+        ))
+    };
+
     let mut sync_now = move || -> Result<String, String> {
         let current_settings = settings();
         if !current_settings.sync_enabled {
@@ -817,7 +940,8 @@ fn VaultScreen(
             }
         }
         let revision = current_settings.sync_revision + 1;
-        let mut envelope = SyncEnvelope::new(current_settings.sync_device_id.clone(), revision, blob);
+        let mut envelope =
+            SyncEnvelope::new(current_settings.sync_device_id.clone(), revision, blob);
         let context = sync_context(&envelope)?;
         envelope.vault = crypto::encrypt_with_aad(&json, &password, &context)
             .map_err(|_| "encryption failed".to_string())?;
@@ -825,7 +949,12 @@ fn VaultScreen(
         envelope.vault.vault_name = current_settings
             .active_vault_id
             .as_ref()
-            .and_then(|id| current_settings.vaults.iter().find(|profile| &profile.id == id))
+            .and_then(|id| {
+                current_settings
+                    .vaults
+                    .iter()
+                    .find(|profile| &profile.id == id)
+            })
             .map(|profile| profile.name.clone());
         storage::upload_sync(std::path::Path::new(folder), &envelope).map_err(|e| e.to_string())?;
         let mut updated = current_settings;
@@ -922,16 +1051,7 @@ fn VaultScreen(
                     })),
                     Err(error) => save_error.set(Some(format!("Backup failed: {error}"))),
                 },
-                "restore-file" => match restore_from_backup() {
-                    Ok(Some(message)) => copy_timer.send(ToastCommand::Show(ToastState {
-                        id: 0,
-                        label: message,
-                        duration_ms: 7000,
-                        remaining_ms: 7000,
-                    })),
-                    Ok(None) => {}
-                    Err(error) => save_error.set(Some(error)),
-                },
+                "restore-file" => show_restore_options.set(true),
                 "sync-now" => match sync_now() {
                     Ok(message) => copy_timer.send(ToastCommand::Show(ToastState {
                         id: 0,
@@ -972,17 +1092,7 @@ fn VaultScreen(
         .filter(|e| {
             let q = search().to_lowercase();
             let matches_folder = match selected_folder() {
-                Some(folder_id) => e
-                    .folder_id
-                    .map(|entry_folder_id| {
-                        vault()
-                            .as_ref()
-                            .map(|current_vault| {
-                                current_vault.folder_is_in_subtree(entry_folder_id, folder_id)
-                            })
-                            .unwrap_or(false)
-                    })
-                    .unwrap_or(false),
+                Some(folder_id) => e.folder_id == Some(folder_id),
                 None => true,
             };
             matches_folder
@@ -1101,19 +1211,10 @@ fn VaultScreen(
                     }
                     button {
                         class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
-                        title: "Restore from backup file",
-                        aria_label: "Restore from backup file",
-                        onclick: move |_| match restore_from_backup() {
-                            Ok(Some(message)) => copy_timer.send(ToastCommand::Show(ToastState {
-                                id: 0,
-                                label: message,
-                                duration_ms: 7000,
-                                remaining_ms: 7000,
-                            })),
-                            Ok(None) => {}
-                            Err(error) => save_error.set(Some(error)),
-                        },
-                        if settings().primary_action_display == PrimaryActionDisplay::Icons { "↥" } else { "Restore from File" }
+                        title: "Restore from backup",
+                        aria_label: "Restore from backup",
+                        onclick: move |_| show_restore_options.set(true),
+                        if settings().primary_action_display == PrimaryActionDisplay::Icons { "↥" } else { "Restore" }
                     }
                     if settings().sync_enabled {
                         button {
@@ -1313,6 +1414,11 @@ fn VaultScreen(
                                 div { class: "entry-main",
                                     span { class: "entry-title", "{entry.title}" }
                                     span { class: "entry-username", "{entry.username}" }
+                                    if let Some(folder_id) = entry.folder_id {
+                                        span { class: "entry-folder", "{folder_path(&folders, folder_id)}" }
+                                    } else {
+                                        span { class: "entry-folder", "Unfiled" }
+                                    }
                                 }
                                 div { class: "entry-actions",
                                     button {
@@ -1577,6 +1683,175 @@ fn VaultScreen(
                                     }
                                 },
                                 "Save"
+                            }
+                        }
+                    }
+                }
+            }
+
+            if show_restore_options() {
+                div { class: "modal-backdrop",
+                    div { class: "modal restore-modal",
+                        span { class: "eyebrow", "RESTORE BACKUP" }
+                        h2 { "Choose what to restore" }
+                        p { class: "settings-help", "Restore the entire vault or choose specific folders and entries from a backup." }
+                        div { class: "restore-mode-actions",
+                            button {
+                                class: "restore-mode-option",
+                                onclick: move |_| {
+                                    show_restore_options.set(false);
+                                    match restore_from_backup() {
+                                        Ok(Some(message)) => copy_timer.send(ToastCommand::Show(ToastState {
+                                            id: 0,
+                                            label: message,
+                                            duration_ms: 7000,
+                                            remaining_ms: 7000,
+                                        })),
+                                        Ok(None) => {}
+                                        Err(error) => save_error.set(Some(error)),
+                                    }
+                                },
+                                strong { "Entire vault" }
+                                span { "Replace the current vault after validation." }
+                            }
+                            button {
+                                class: "restore-mode-option",
+                                onclick: move |_| {
+                                    show_restore_options.set(false);
+                                    if let Err(error) = open_cherry_pick() {
+                                        save_error.set(Some(error));
+                                    }
+                                },
+                                strong { "Choose items" }
+                                span { "Browse folders and entries in a file-style tree." }
+                            }
+                        }
+                        div { class: "modal-actions",
+                            button {
+                                class: "secondary-btn",
+                                onclick: move |_| show_restore_options.set(false),
+                                "Cancel"
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(selection) = cherry_pick() {
+                div { class: "modal-backdrop",
+                    div { class: "modal restore-modal",
+                        span { class: "eyebrow", "SELECTIVE RESTORE" }
+                        h2 { "Choose items from backup" }
+                        p { class: "settings-help", "Select folders or entries to add. Existing vault content will not be replaced." }
+                        div { class: "restore-selection-list",
+                            for (folder, depth) in flatten_folder_tree(&selection.source.folders) {
+                                label {
+                                    class: "restore-selection-item restore-tree-item",
+                                    style: "padding-left: {depth}rem",
+                                    input {
+                                        r#type: "checkbox",
+                                        checked: selection.selected_folders.contains(&folder.id),
+                                        onchange: {
+                                            let folder_id = folder.id;
+                                            move |event| {
+                                                if let Some(mut updated) = cherry_pick() {
+                                                    if event.value() == "true" {
+                                                        for candidate in &updated.source.folders {
+                                                            if candidate.id == folder_id
+                                                                || updated.source.folder_is_in_subtree(candidate.id, folder_id)
+                                                            {
+                                                                updated.selected_folders.insert(candidate.id);
+                                                            }
+                                                        }
+                                                    } else {
+                                                        let descendants: Vec<Uuid> = updated
+                                                            .source
+                                                            .folders
+                                                            .iter()
+                                                            .filter(|candidate| {
+                                                                candidate.id == folder_id
+                                                                    || updated.source.folder_is_in_subtree(candidate.id, folder_id)
+                                                            })
+                                                            .map(|candidate| candidate.id)
+                                                            .collect();
+                                                        for descendant in descendants {
+                                                            updated.selected_folders.remove(&descendant);
+                                                        }
+                                                    }
+                                                    cherry_pick.set(Some(updated));
+                                                }
+                                            }
+                                        },
+                                    }
+                                    span { "📁 {folder.name}" }
+                                }
+                                for entry in selection.source.entries.iter().filter(|entry| entry.folder_id == Some(folder.id)) {
+                                    label {
+                                        class: "restore-selection-item restore-tree-entry",
+                                        style: "padding-left: {depth + 1}rem",
+                                        input {
+                                            r#type: "checkbox",
+                                            checked: selection.selected_entries.contains(&entry.id),
+                                            onchange: {
+                                                let entry_id = entry.id;
+                                                move |event| {
+                                                    if let Some(mut updated) = cherry_pick() {
+                                                        if event.value() == "true" {
+                                                            updated.selected_entries.insert(entry_id);
+                                                        } else {
+                                                            updated.selected_entries.remove(&entry_id);
+                                                        }
+                                                        cherry_pick.set(Some(updated));
+                                                    }
+                                                }
+                                            },
+                                        }
+                                        span { "🔑 {entry.title}" }
+                                    }
+                                }
+                            }
+                            h3 { "Unfiled entries" }
+                            for entry in selection.source.entries.iter().filter(|entry| entry.folder_id.is_none()) {
+                                label { class: "restore-selection-item",
+                                    input {
+                                        r#type: "checkbox",
+                                        checked: selection.selected_entries.contains(&entry.id),
+                                        onchange: {
+                                            let entry_id = entry.id;
+                                            move |event| {
+                                                if let Some(mut updated) = cherry_pick() {
+                                                    if event.value() == "true" {
+                                                        updated.selected_entries.insert(entry_id);
+                                                    } else {
+                                                        updated.selected_entries.remove(&entry_id);
+                                                    }
+                                                    cherry_pick.set(Some(updated));
+                                                }
+                                            }
+                                        },
+                                    }
+                                    span { "🔑 {entry.title}" }
+                                }
+                            }
+                        }
+                        div { class: "modal-actions",
+                            button {
+                                class: "secondary-btn",
+                                onclick: move |_| cherry_pick.set(None),
+                                "Cancel"
+                            }
+                            button {
+                                class: "primary",
+                                onclick: move |_| match apply_cherry_pick() {
+                                    Ok(message) => copy_timer.send(ToastCommand::Show(ToastState {
+                                        id: 0,
+                                        label: message,
+                                        duration_ms: 7000,
+                                        remaining_ms: 7000,
+                                    })),
+                                    Err(error) => save_error.set(Some(error)),
+                                },
+                                "Restore selected"
                             }
                         }
                     }
@@ -2535,7 +2810,6 @@ fn MoveFolderDialog(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
 
     #[test]
     fn folder_ancestors_include_parents_in_order() {
@@ -2546,6 +2820,38 @@ mod tests {
 
         let ancestors = folder_ancestors(&folders, grandchild.id);
         assert_eq!(ancestors, vec![child.id, root.id]);
+    }
+
+    #[test]
+    fn cherry_pick_preserves_selected_folder_hierarchy_with_fresh_ids() {
+        let mut source = Vault::default();
+        let root = source.create_folder("Work".into(), None).unwrap();
+        let child = source
+            .create_folder("Projects".into(), Some(root.id))
+            .unwrap();
+        let mut entry = VaultEntry::new(
+            "GitHub".into(),
+            "alice".into(),
+            "secret".into(),
+            "https://github.com".into(),
+            String::new(),
+        );
+        entry.folder_id = Some(child.id);
+        let entry_id = entry.id;
+        source.add_entry(entry);
+
+        let current = Vault::default();
+        let selected_folders = source.folders.iter().map(|folder| folder.id).collect();
+        let selected_entries = [entry_id].into_iter().collect();
+        let merged =
+            merge_cherry_picked(&current, &source, &selected_folders, &selected_entries).unwrap();
+
+        assert_eq!(merged.folders.len(), 2);
+        assert_eq!(merged.entries.len(), 1);
+        assert_ne!(merged.folders[0].id, root.id);
+        assert_eq!(merged.folders[1].parent_id, Some(merged.folders[0].id));
+        assert_eq!(merged.entries[0].folder_id, Some(merged.folders[1].id));
+        assert_ne!(merged.entries[0].id, entry_id);
     }
 }
 

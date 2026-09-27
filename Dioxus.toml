@@ -2,6 +2,9 @@
 name = "jpass"
 default_platform = "desktop"
 
+[bundle]
+identifier = "dev.jpass.app"
+
 [web.app]
 title = "JPass"
 
@@ -10,3 +13,5 @@ watch_path = ["src", "assets"]
 
 [web.resource]
 style = ["assets/main.css"]
+
+[web.resource.dev]

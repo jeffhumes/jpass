@@ -171,10 +171,12 @@ mod tests {
         let primary = VaultProfile {
             id: "vault-primary".to_string(),
             name: "Primary".to_string(),
+            backup_folder: None,
         };
         let work = VaultProfile {
             id: "vault-work".to_string(),
             name: "Work".to_string(),
+            backup_folder: None,
         };
 
         let mut updated = AppSettings::default();
@@ -205,6 +207,8 @@ impl AppSettings {
 pub struct VaultProfile {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub backup_folder: Option<String>,
 }
 
 impl Default for VaultProfile {
@@ -212,6 +216,7 @@ impl Default for VaultProfile {
         Self {
             id: Uuid::new_v4().to_string(),
             name: "Primary".to_string(),
+            backup_folder: None,
         }
     }
 }

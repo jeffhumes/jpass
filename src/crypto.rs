@@ -4,7 +4,7 @@
 //! The encryption key is derived from the user's master password with Argon2id,
 //! using a random salt that is stored alongside the ciphertext.
 
-use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::engine::general_purpose::STANDARD as B64;
@@ -62,6 +62,15 @@ fn derive_key(password: &str, salt: &[u8]) -> Result<[u8; KEY_LEN], CryptoError>
 /// Encrypt `plaintext` with a key derived from `password`, generating a fresh
 /// random salt and nonce.
 pub fn encrypt(plaintext: &[u8], password: &str) -> Result<EncryptedBlob, CryptoError> {
+    encrypt_with_aad(plaintext, password, &[])
+}
+
+/// Encrypt `plaintext` and authenticate `aad` without storing it in the blob.
+pub fn encrypt_with_aad(
+    plaintext: &[u8],
+    password: &str,
+    aad: &[u8],
+) -> Result<EncryptedBlob, CryptoError> {
     let mut salt = [0u8; SALT_LEN];
     OsRng.fill_bytes(&mut salt);
     let mut nonce_bytes = [0u8; NONCE_LEN];
@@ -71,7 +80,7 @@ pub fn encrypt(plaintext: &[u8], password: &str) -> Result<EncryptedBlob, Crypto
     let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(key_bytes));
     let nonce = Nonce::from(nonce_bytes);
     let ciphertext = cipher
-        .encrypt(&nonce, plaintext)
+        .encrypt(&nonce, Payload { msg: plaintext, aad })
         .map_err(|_| CryptoError::Encryption)?;
     key_bytes.zeroize();
 
@@ -86,6 +95,15 @@ pub fn encrypt(plaintext: &[u8], password: &str) -> Result<EncryptedBlob, Crypto
 
 /// Decrypt a blob previously produced by [`encrypt`] using `password`.
 pub fn decrypt(blob: &EncryptedBlob, password: &str) -> Result<Vec<u8>, CryptoError> {
+    decrypt_with_aad(blob, password, &[])
+}
+
+/// Decrypt a blob while verifying the supplied authenticated data.
+pub fn decrypt_with_aad(
+    blob: &EncryptedBlob,
+    password: &str,
+    aad: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
     let salt = B64
         .decode(&blob.salt)
         .map_err(|_| CryptoError::Decryption)?;
@@ -102,7 +120,13 @@ pub fn decrypt(blob: &EncryptedBlob, password: &str) -> Result<Vec<u8>, CryptoEr
     let mut key_bytes = derive_key(password, &salt)?;
     let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(key_bytes));
     let nonce = Nonce::from(nonce_bytes);
-    let plaintext = cipher.decrypt(&nonce, ciphertext.as_ref());
+    let plaintext = cipher.decrypt(
+        &nonce,
+        Payload {
+            msg: ciphertext.as_ref(),
+            aad,
+        },
+    );
     key_bytes.zeroize();
     if let Ok(plaintext) = plaintext {
         return Ok(plaintext);
@@ -119,7 +143,13 @@ pub fn decrypt(blob: &EncryptedBlob, password: &str) -> Result<Vec<u8>, CryptoEr
     )?;
     let legacy_cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(legacy_key));
     let plaintext = legacy_cipher
-        .decrypt(&nonce, ciphertext.as_ref())
+        .decrypt(
+            &nonce,
+            Payload {
+                msg: ciphertext.as_ref(),
+                aad,
+            },
+        )
         .map_err(|_| CryptoError::Decryption);
     legacy_key.zeroize();
     plaintext
@@ -158,6 +188,19 @@ mod tests {
         ciphertext[0] ^= 0x01;
         blob.ciphertext = B64.encode(ciphertext);
 
+        assert!(decrypt(&blob, "strong test password").is_err());
+    }
+
+    #[test]
+    fn authenticated_data_is_required_for_decryption() {
+        let blob = encrypt_with_aad(b"sensitive vault data", "strong test password", b"header")
+            .unwrap();
+
+        assert_eq!(
+            decrypt_with_aad(&blob, "strong test password", b"header").unwrap(),
+            b"sensitive vault data"
+        );
+        assert!(decrypt_with_aad(&blob, "strong test password", b"tampered-header").is_err());
         assert!(decrypt(&blob, "strong test password").is_err());
     }
 }

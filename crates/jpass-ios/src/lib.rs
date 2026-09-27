@@ -53,7 +53,11 @@ impl ClipboardService for IosStore {
 impl BackupService for IosStore {
     type Error = PlatformError;
 
-    fn save_encrypted_backup(&self, _blob: &EncryptedBlob) -> Result<PathBuf, Self::Error> {
+    fn save_encrypted_backup(
+        &self,
+        _blob: &EncryptedBlob,
+        _destination_dir: Option<&std::path::Path>,
+    ) -> Result<PathBuf, Self::Error> {
         Err(PlatformError::Storage(
             "iOS backup destination requires the native document picker binding".to_string(),
         ))

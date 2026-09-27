@@ -86,10 +86,13 @@ mod tests {
     }
 }
 
-pub fn save_encrypted_backup(blob: &EncryptedBlob) -> Result<PathBuf, StorageError> {
+pub fn save_encrypted_backup(
+    blob: &EncryptedBlob,
+    destination_dir: Option<&Path>,
+) -> Result<PathBuf, StorageError> {
     let adapter = PlatformAdapter::current();
     adapter
-        .save_encrypted_backup(blob)
+        .save_encrypted_backup(blob, destination_dir)
         .map_err(|e| StorageError::Backend(e.to_string()))
 }
 
@@ -97,6 +100,13 @@ pub fn choose_backup_file() -> Result<Option<PathBuf>, StorageError> {
     let adapter = PlatformAdapter::current();
     adapter
         .choose_backup_file()
+        .map_err(|e| StorageError::Backend(e.to_string()))
+}
+
+pub fn choose_backup_folder() -> Result<Option<PathBuf>, StorageError> {
+    let adapter = PlatformAdapter::current();
+    adapter
+        .choose_backup_folder()
         .map_err(|e| StorageError::Backend(e.to_string()))
 }
 

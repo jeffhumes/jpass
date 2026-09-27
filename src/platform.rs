@@ -19,8 +19,13 @@ pub trait PlatformAdapterTrait {
     fn save_vault_for_id(&self, vault_id: Option<&str>, blob: &EncryptedBlob)
         -> Result<(), String>;
     fn vault_file_name(&self, vault_id: Option<&str>) -> String;
-    fn save_encrypted_backup(&self, blob: &EncryptedBlob) -> Result<PathBuf, String>;
+    fn save_encrypted_backup(
+        &self,
+        blob: &EncryptedBlob,
+        destination_dir: Option<&Path>,
+    ) -> Result<PathBuf, String>;
     fn choose_backup_file(&self) -> Result<Option<PathBuf>, String>;
+    fn choose_backup_folder(&self) -> Result<Option<PathBuf>, String>;
     fn load_backup_file(&self, path: &Path) -> Result<EncryptedBlob, String>;
     fn load_settings(&self) -> Result<AppSettings, String>;
     fn save_settings(&self, settings: &AppSettings) -> Result<(), String>;
@@ -40,7 +45,7 @@ pub struct PlatformAdapter {
 impl PlatformAdapter {
     pub fn current() -> Self {
         Self {
-            kind: PlatformKind::Desktop,
+            kind: current_platform_kind(),
         }
     }
 
@@ -66,6 +71,26 @@ impl PlatformAdapter {
     }
 }
 
+#[cfg(target_os = "android")]
+fn current_platform_kind() -> PlatformKind {
+    PlatformKind::Android
+}
+
+#[cfg(target_os = "ios")]
+fn current_platform_kind() -> PlatformKind {
+    PlatformKind::Ios
+}
+
+#[cfg(target_arch = "wasm32")]
+fn current_platform_kind() -> PlatformKind {
+    PlatformKind::Web
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+fn current_platform_kind() -> PlatformKind {
+    PlatformKind::Desktop
+}
+
 impl PlatformAdapterTrait for PlatformAdapter {
     fn load_vault(&self) -> Result<Option<EncryptedBlob>, String> {
         PlatformAdapterTrait::load_vault_for_id(self, None)
@@ -80,9 +105,7 @@ impl PlatformAdapterTrait for PlatformAdapter {
             #[cfg(feature = "desktop")]
             PlatformKind::Desktop => {
                 let store = jpass_desktop::desktop_store();
-                store
-                    .load_vault_for_id(vault_id)
-                    .map_err(|e| e.to_string())
+                store.load_vault_for_id(vault_id).map_err(|e| e.to_string())
             }
             #[cfg(not(feature = "desktop"))]
             PlatformKind::Desktop => {
@@ -90,7 +113,7 @@ impl PlatformAdapterTrait for PlatformAdapter {
             }
             PlatformKind::Android => {
                 let store = jpass_android::android_store();
-                store.load_vault().map_err(|e| e.to_string())
+                store.load_vault_for_id(vault_id).map_err(|e| e.to_string())
             }
             PlatformKind::Ios => {
                 let store = jpass_ios::ios_store();
@@ -119,7 +142,9 @@ impl PlatformAdapterTrait for PlatformAdapter {
             }
             PlatformKind::Android => {
                 let store = jpass_android::android_store();
-                store.save_vault(blob).map_err(|e| e.to_string())
+                store
+                    .save_vault_for_id(vault_id, blob)
+                    .map_err(|e| e.to_string())
             }
             PlatformKind::Ios => {
                 let store = jpass_ios::ios_store();
@@ -139,7 +164,9 @@ impl PlatformAdapterTrait for PlatformAdapter {
             PlatformKind::Desktop => {
                 Err("Desktop adapter is not enabled for this build".to_string())
             }
-            PlatformKind::Android => Err("Vault deletion is not implemented for Android".into()),
+            PlatformKind::Android => jpass_android::android_store()
+                .delete_vault_for_id(vault_id)
+                .map_err(|e| e.to_string()),
             PlatformKind::Ios => Err("Vault deletion is not implemented for iOS".into()),
             PlatformKind::Web => Err("Vault deletion is not implemented for web".into()),
         }
@@ -149,25 +176,37 @@ impl PlatformAdapterTrait for PlatformAdapter {
         PlatformAdapter::vault_file_name(self, vault_id)
     }
 
-    fn save_encrypted_backup(&self, blob: &EncryptedBlob) -> Result<PathBuf, String> {
+    fn save_encrypted_backup(
+        &self,
+        blob: &EncryptedBlob,
+        destination_dir: Option<&Path>,
+    ) -> Result<PathBuf, String> {
         match self.kind {
             #[cfg(feature = "desktop")]
             PlatformKind::Desktop => jpass_desktop::desktop_store()
-                .save_encrypted_backup(blob)
+                .save_encrypted_backup(blob, destination_dir)
                 .map_err(|e| e.to_string()),
             #[cfg(not(feature = "desktop"))]
             PlatformKind::Desktop => {
                 Err("Desktop adapter is not enabled for this build".to_string())
             }
             PlatformKind::Android => jpass_android::android_store()
-                .save_encrypted_backup(blob)
+                .save_encrypted_backup(blob, destination_dir)
                 .map_err(|e| e.to_string()),
             PlatformKind::Ios => jpass_ios::ios_store()
-                .save_encrypted_backup(blob)
+                .save_encrypted_backup(blob, destination_dir)
                 .map_err(|e| e.to_string()),
             PlatformKind::Web => {
                 Err("Web backup adapter not implemented in this repo yet".to_string())
             }
+        }
+    }
+
+    fn choose_backup_folder(&self) -> Result<Option<PathBuf>, String> {
+        match self.kind {
+            #[cfg(feature = "desktop")]
+            PlatformKind::Desktop => Ok(jpass_desktop::choose_backup_folder()),
+            _ => Err("Backup folder picker is not implemented for this platform".to_string()),
         }
     }
 

@@ -66,6 +66,12 @@ pub fn choose_backup_file() -> Option<PathBuf> {
         .pick_file()
 }
 
+pub fn choose_backup_folder() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .set_title("Choose JPass backup folder")
+        .pick_folder()
+}
+
 impl VaultStore for DesktopStore {
     type Error = PlatformError;
 
@@ -211,11 +217,18 @@ fn vault_file_name(vault_id: Option<&str>) -> String {
 impl BackupService for DesktopStore {
     type Error = PlatformError;
 
-    fn save_encrypted_backup(&self, blob: &EncryptedBlob) -> Result<PathBuf, Self::Error> {
-        let backup_dir = self
-            .data_dir()
-            .map_err(|e| PlatformError::Path(e.to_string()))?
-            .join("backups");
+    fn save_encrypted_backup(
+        &self,
+        blob: &EncryptedBlob,
+        destination_dir: Option<&std::path::Path>,
+    ) -> Result<PathBuf, Self::Error> {
+        let backup_dir = match destination_dir {
+            Some(dir) => dir.to_path_buf(),
+            None => self
+                .data_dir()
+                .map_err(|e| PlatformError::Path(e.to_string()))?
+                .join("backups"),
+        };
         fs::create_dir_all(&backup_dir).map_err(|e| {
             PlatformError::Storage(format!("failed to create backup directory: {e}"))
         })?;

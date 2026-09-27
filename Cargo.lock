@@ -3289,9 +3289,12 @@ dependencies = [
 name = "jpass-android"
 version = "0.1.0"
 dependencies = [
+ "jni 0.21.1",
  "jpass-core",
  "jpass-platform",
+ "ndk-context",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

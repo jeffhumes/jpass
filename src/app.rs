@@ -33,14 +33,44 @@ fn encrypt_vault_backup(
     settings: &AppSettings,
 ) -> Result<EncryptedBlob, String> {
     let json = vault.to_json().map_err(|e| e.to_string())?;
-    let mut blob = crypto::encrypt(&json, password).map_err(|_| "encryption failed".to_string())?;
-    blob.vault_id = settings.active_vault_id.clone();
-    blob.vault_name = settings
+    let vault_id = settings.active_vault_id.clone();
+    let vault_name = settings
         .active_vault_id
         .as_ref()
         .and_then(|id| settings.vaults.iter().find(|profile| &profile.id == id))
         .map(|profile| profile.name.clone());
+    let context = serde_json::to_vec(&(vault_id.as_deref(), vault_name.as_deref()))
+        .map_err(|e| e.to_string())?;
+    let mut blob = crypto::encrypt_with_aad(&json, password, &context)
+        .map_err(|_| "encryption failed".to_string())?;
+    blob.vault_id = vault_id;
+    blob.vault_name = vault_name;
     Ok(blob)
+}
+
+fn backup_context(blob: &EncryptedBlob) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&(blob.vault_id.as_deref(), blob.vault_name.as_deref()))
+        .map_err(|e| e.to_string())
+}
+
+fn sync_context(envelope: &SyncEnvelope) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&(
+        envelope.schema_version,
+        &envelope.device_id,
+        envelope.revision,
+        envelope.modified_at,
+    ))
+    .map_err(|e| e.to_string())
+}
+
+/// The user-configured backup destination for the currently active vault, if one was set.
+fn active_vault_backup_dir(settings: &AppSettings) -> Option<std::path::PathBuf> {
+    settings
+        .active_vault_id
+        .as_ref()
+        .and_then(|id| settings.vaults.iter().find(|profile| &profile.id == id))
+        .and_then(|profile| profile.backup_folder.as_deref())
+        .map(std::path::PathBuf::from)
 }
 
 fn prepare_vault_startup(error: &mut Signal<Option<String>>) -> Screen {
@@ -53,6 +83,7 @@ fn prepare_vault_startup(error: &mut Signal<Option<String>>) -> Screen {
                 settings.vaults.push(VaultProfile {
                     id: vault_id.clone(),
                     name: "Primary".to_string(),
+                    backup_folder: None,
                 });
                 settings.active_vault_id = Some(vault_id.clone());
                 settings.default_vault_id = Some(vault_id.clone());
@@ -343,6 +374,7 @@ fn CreateMasterScreen(
         settings.vaults.push(VaultProfile {
             id: vault_id.clone(),
             name,
+            backup_folder: None,
         });
         settings.active_vault_id = Some(vault_id.clone());
         if settings.default_vault_id.is_none() {
@@ -625,7 +657,9 @@ fn VaultScreen(
             return Err("Vault is unavailable.".into());
         };
         let blob = encrypt_vault_backup(&current_vault, &pw, &settings())?;
-        let path = storage::save_encrypted_backup(&blob).map_err(|e| e.to_string())?;
+        let backup_dir = active_vault_backup_dir(&settings());
+        let path = storage::save_encrypted_backup(&blob, backup_dir.as_deref())
+            .map_err(|e| e.to_string())?;
         Ok(path.display().to_string())
     };
 
@@ -638,15 +672,20 @@ fn VaultScreen(
         };
         let json = current_vault.to_json().map_err(|e| e.to_string())?;
         let blob = encrypt_vault_backup(&current_vault, &pw, &settings())?;
-        let restored = crypto::decrypt(&blob, &pw).map_err(|_| {
-            "backup validation failed: encrypted data could not be decrypted".to_string()
-        })?;
+        let context = backup_context(&blob)?;
+        let restored = crypto::decrypt_with_aad(&blob, &pw, &context)
+            .or_else(|_| crypto::decrypt(&blob, &pw))
+            .map_err(|_| {
+                "backup validation failed: encrypted data could not be decrypted".to_string()
+            })?;
         let restored_vault = Vault::from_json(&restored)
             .map_err(|_| "backup validation failed: vault data could not be parsed".to_string())?;
         if restored_vault.to_json().map_err(|e| e.to_string())? != json {
             return Err("backup validation failed: restored data does not match the vault".into());
         }
-        let path = storage::save_encrypted_backup(&blob).map_err(|e| e.to_string())?;
+        let backup_dir = active_vault_backup_dir(&settings());
+        let path = storage::save_encrypted_backup(&blob, backup_dir.as_deref())
+            .map_err(|e| e.to_string())?;
         Ok(path.display().to_string())
     };
 
@@ -658,7 +697,9 @@ fn VaultScreen(
             return Err("Restore failed: vault is locked.".into());
         };
         let blob = storage::load_encrypted_backup(&path).map_err(|e| e.to_string())?;
-        let restored = crypto::decrypt(&blob, &password)
+        let context = backup_context(&blob)?;
+        let restored = crypto::decrypt_with_aad(&blob, &password, &context)
+            .or_else(|_| crypto::decrypt(&blob, &password))
             .map_err(|_| "Restore failed: backup could not be decrypted.".to_string())?;
         let restored_vault = Vault::from_json(&restored)
             .map_err(|_| "Restore failed: backup vault data is invalid.".to_string())?;
@@ -684,13 +725,20 @@ fn VaultScreen(
             let mut restored_blob = blob;
             restored_blob.vault_id = Some(restored_id.clone());
             restored_blob.vault_name = Some(restored_name.clone());
-            storage::save_encrypted_for_vault(Some(&restored_id), &restored_blob)
+            let mut storage_blob =
+                crypto::encrypt(&restored, &password).map_err(|_| {
+                    "Restore failed: could not prepare the restored vault.".to_string()
+                })?;
+            storage_blob.vault_id = restored_blob.vault_id.clone();
+            storage_blob.vault_name = restored_blob.vault_name.clone();
+            storage::save_encrypted_for_vault(Some(&restored_id), &storage_blob)
                 .map_err(|e| format!("Restore failed: could not save the restored vault: {e}"))?;
 
             let mut updated = current_settings;
             updated.vaults.push(VaultProfile {
                 id: restored_id,
                 name: restored_name.clone(),
+                backup_folder: None,
             });
             updated.active_vault_id = updated.vaults.last().map(|profile| profile.id.clone());
             storage::save_settings(&updated).map_err(|e| {
@@ -707,7 +755,9 @@ fn VaultScreen(
             };
             let json = current_vault.to_json().map_err(|e| e.to_string())?;
             let current_blob = encrypt_vault_backup(&current_vault, &password, &current_settings)?;
-            let validated = crypto::decrypt(&current_blob, &password)
+            let context = backup_context(&current_blob)?;
+            let validated = crypto::decrypt_with_aad(&current_blob, &password, &context)
+                .or_else(|_| crypto::decrypt(&current_blob, &password))
                 .map_err(|_| "Restore failed: safety backup could not be validated.".to_string())?;
             let validated_vault = Vault::from_json(&validated).map_err(|_| {
                 "Restore failed: safety backup vault data could not be parsed.".to_string()
@@ -717,13 +767,20 @@ fn VaultScreen(
                     "Restore failed: safety backup validation did not match the vault.".into(),
                 );
             }
-            storage::save_encrypted_backup(&current_blob)
-                .map_err(|e| e.to_string())?
-                .display()
-                .to_string()
+            storage::save_encrypted_backup(
+                &current_blob,
+                active_vault_backup_dir(&current_settings).as_deref(),
+            )
+            .map_err(|e| e.to_string())?
+            .display()
+            .to_string()
         };
 
-        storage::save_encrypted_for_vault(active_id.as_deref(), &blob)
+        let mut storage_blob = crypto::encrypt(&restored, &password)
+            .map_err(|_| "Restore failed: could not prepare the restored vault.".to_string())?;
+        storage_blob.vault_id = blob.vault_id.clone();
+        storage_blob.vault_name = blob.vault_name.clone();
+        storage::save_encrypted_for_vault(active_id.as_deref(), &storage_blob)
             .map_err(|e| e.to_string())?;
         vault.set(Some(restored_vault));
         Ok(Some(format!(
@@ -760,7 +817,16 @@ fn VaultScreen(
             }
         }
         let revision = current_settings.sync_revision + 1;
-        let envelope = SyncEnvelope::new(current_settings.sync_device_id.clone(), revision, blob);
+        let mut envelope = SyncEnvelope::new(current_settings.sync_device_id.clone(), revision, blob);
+        let context = sync_context(&envelope)?;
+        envelope.vault = crypto::encrypt_with_aad(&json, &password, &context)
+            .map_err(|_| "encryption failed".to_string())?;
+        envelope.vault.vault_id = current_settings.active_vault_id.clone();
+        envelope.vault.vault_name = current_settings
+            .active_vault_id
+            .as_ref()
+            .and_then(|id| current_settings.vaults.iter().find(|profile| &profile.id == id))
+            .map(|profile| profile.name.clone());
         storage::upload_sync(std::path::Path::new(folder), &envelope).map_err(|e| e.to_string())?;
         let mut updated = current_settings;
         updated.sync_revision = revision;
@@ -786,14 +852,20 @@ fn VaultScreen(
         else {
             return Err("No remote vault was found in the sync folder.".into());
         };
-        let restored = crypto::decrypt(&remote.vault, &password)
+        let context = sync_context(&remote)?;
+        let restored = crypto::decrypt_with_aad(&remote.vault, &password, &context)
+            .or_else(|_| crypto::decrypt(&remote.vault, &password))
             .map_err(|_| "Restore failed: remote vault could not be decrypted.".to_string())?;
         let restored_vault = Vault::from_json(&restored)
             .map_err(|_| "Restore failed: remote vault data is invalid.".to_string())?;
 
         let backup_path = create_validated_backup()?;
         let active_id = active_vault_id();
-        storage::save_encrypted_for_vault(active_id.as_deref(), &remote.vault)
+        let mut storage_blob = crypto::encrypt(&restored, &password)
+            .map_err(|_| "Restore failed: could not prepare the restored vault.".to_string())?;
+        storage_blob.vault_id = remote.vault.vault_id.clone();
+        storage_blob.vault_name = remote.vault.vault_name.clone();
+        storage::save_encrypted_for_vault(active_id.as_deref(), &storage_blob)
             .map_err(|e| e.to_string())?;
         vault.set(Some(restored_vault));
 
@@ -1787,6 +1859,13 @@ fn SettingsDialog(
         .last_sync_at
         .map(|value| value.to_rfc3339())
         .unwrap_or_else(|| "Never".into());
+    let active_backup_folder = settings().active_vault_id.as_ref().and_then(|id| {
+        settings()
+            .vaults
+            .iter()
+            .find(|profile| &profile.id == id)
+            .and_then(|profile| profile.backup_folder.clone())
+    });
 
     rsx! {
         div { class: "modal-backdrop",
@@ -1828,6 +1907,11 @@ fn SettingsDialog(
                             class: if active_section() == "sync" { "settings-nav-item active" } else { "settings-nav-item" },
                             onclick: move |_| active_section.set("sync"),
                             "Sync"
+                        }
+                        button {
+                            class: if active_section() == "backup" { "settings-nav-item active" } else { "settings-nav-item" },
+                            onclick: move |_| active_section.set("backup"),
+                            "Backup"
                         }
                     }
                     div { class: "settings-content",
@@ -2083,6 +2167,57 @@ fn SettingsDialog(
                         disabled: !settings().sync_enabled,
                         onclick: move |_| on_sync.call(()),
                         "Sync Now"
+                    }
+                }
+                div { class: if active_section() == "backup" { "settings-section active" } else { "settings-section" },
+                    label { "Backup location" }
+                    p { class: "settings-help", "Choose where encrypted backups for the current vault are saved. This setting applies only to the currently open vault." }
+                    div { class: "sync-folder-picker",
+                        div { class: "sync-folder-path",
+                            if let Some(path) = active_backup_folder.clone() {
+                                "{path}"
+                            } else {
+                                "Using default app data folder"
+                            }
+                        }
+                        button {
+                            class: "secondary-btn",
+                            onclick: move |_| match storage::choose_backup_folder() {
+                                Ok(Some(path)) => {
+                                    let mut updated = settings();
+                                    let Some(active_id) = updated.active_vault_id.clone() else {
+                                        on_error.call("No vault is currently open.".to_string());
+                                        return;
+                                    };
+                                    if let Some(profile) =
+                                        updated.vaults.iter_mut().find(|profile| profile.id == active_id)
+                                    {
+                                        profile.backup_folder = Some(path.display().to_string());
+                                    }
+                                    save(updated);
+                                }
+                                Ok(None) => {}
+                                Err(error) => on_error.call(format!("Folder picker failed: {error}")),
+                            },
+                            "Browse..."
+                        }
+                        if active_backup_folder.is_some() {
+                            button {
+                                class: "secondary-btn",
+                                onclick: move |_| {
+                                    let mut updated = settings();
+                                    if let Some(active_id) = updated.active_vault_id.clone() {
+                                        if let Some(profile) =
+                                            updated.vaults.iter_mut().find(|profile| profile.id == active_id)
+                                        {
+                                            profile.backup_folder = None;
+                                        }
+                                    }
+                                    save(updated);
+                                },
+                                "Use Default"
+                            }
+                        }
                     }
                 }
                     }

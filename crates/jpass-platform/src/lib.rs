@@ -14,7 +14,11 @@ pub trait VaultStore {
 pub trait BackupService {
     type Error: std::fmt::Display;
 
-    fn save_encrypted_backup(&self, blob: &EncryptedBlob) -> Result<PathBuf, Self::Error>;
+    fn save_encrypted_backup(
+        &self,
+        blob: &EncryptedBlob,
+        destination_dir: Option<&std::path::Path>,
+    ) -> Result<PathBuf, Self::Error>;
     fn load_encrypted_backup(&self, path: &std::path::Path) -> Result<EncryptedBlob, Self::Error>;
 }
 

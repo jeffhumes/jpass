@@ -51,16 +51,40 @@ cargo check
 cargo fmt --check
 ```
 
-## Android Feature Check
+## Android
 
-This checks the mobile configuration for the Android target without producing a complete APK:
+Install the Android target, Dioxus CLI, Android SDK command-line tools, and an Android NDK. Set the
+SDK variables before invoking Dioxus:
 
 ```bash
 rustup target add aarch64-linux-android
+cargo install dioxus-cli --version 0.7.10 --locked
+export ANDROID_HOME="$HOME/android/sdk"
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/30.0.16248370"
+```
+
+Use Android Studio's SDK Manager, or `sdkmanager`, to install an Android platform, build tools, and an
+NDK version compatible with the installed Dioxus CLI. Build an APK with:
+
+```bash
+dx bundle --platform android
+```
+
+The verified release bundle is written under:
+
+```text
+target/dx/jpass/debug/android/app/app/build/outputs/bundle/release/
+```
+
+For a fast Rust-only target check without producing an APK:
+
+```bash
 cargo check --no-default-features --features mobile --target aarch64-linux-android
 ```
 
-A complete Android package also requires the Android SDK/NDK and platform-specific packaging configuration.
+Android data is stored in the application's private home directory under `.jpass`. The release build
+still needs a native Android clipboard binding before copy and clear controls are available.
 
 ## Windows Release Package
 

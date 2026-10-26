@@ -1,0 +1,6 @@
+Native folder picker
+Download/restore from remote
+Full conflict resolution
+Sync history
+Android/iOS sync transports
+Cloud providers

@@ -32,9 +32,9 @@ Existing requirements without a marker are treated as planned until explicitly r
 - Support formats such as XML, JSON, CSV, TSV, and raw data.
 - Support credential export and import across supported platforms and formats.
 - Validate imported data and provide safe conflict handling.
-- [~] Support nested folders with parent and child levels, such as `Personal/Finances`, instead of limiting entries to a single folder level. Nested creation, indented navigation, descendant filtering, folder selection, and individual/all expand-collapse controls are implemented; nested rename/delete management remains pending.
+- [x] Support nested folders with parent and child levels, such as `Personal/Finances`, instead of limiting entries to a single folder level. Nested creation, indented navigation, descendant filtering, folder selection, individual/all expand-collapse controls, rename, delete, and move management are implemented.
 - [x] When adding an entry, let users select an existing folder or create a new folder for the entry before saving.
-- Provide a folder manager that lets users add, delete, and rename folders, and move entries between folders.
+- [x] Provide a file-manager-style folder manager that lets users add, delete, and rename folders, move folders within the hierarchy, and move entries between folders.
 - Allow users to share selected vault entries via text, with explicit confirmation, sensitivity warnings, and secure handling.
 - Keep a history of previous passwords per entry so users can refer back to them.
 
@@ -52,9 +52,9 @@ Existing requirements without a marker are treated as planned until explicitly r
 - [x] New vault encryption uses AES-256-GCM with OS-provided randomness and explicit Argon2id key-derivation parameters.
 - [x] Encryption changes must preserve access to existing vaults through a documented migration path.
 - Never weaken encryption for convenience.
-- Check generated and manually entered passwords for weakness, common patterns, reuse indicators, and likely crackability.
-- Use local or privacy-preserving password checks so secrets are not exposed externally.
-- Perform password checks before accepting or storing passwords where practical.
+- [x] Check generated and manually entered passwords for weakness, common patterns, reuse indicators, and likely crackability using local validation.
+- [x] Use local password checks so secrets are not exposed externally.
+- [x] Perform password checks before accepting or storing entry passwords.
 
 ## Password Generator
 

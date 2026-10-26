@@ -1,6 +1,7 @@
 use crate::crypto::{self, EncryptedBlob};
 use crate::model::{Vault, VaultEntry, VaultFolder};
 use crate::password_gen::{generate_password, PasswordOptions};
+use crate::password_strength::validate_entry_password;
 use crate::{clipboard, storage};
 use dioxus::prelude::*;
 use jpass_core::{
@@ -225,6 +226,22 @@ fn folder_is_visible(folders: &[VaultFolder], folder_id: Uuid, expanded: &HashSe
 enum ToastCommand {
     Show(ToastState),
     Cancel(u64),
+}
+
+#[derive(Clone, Copy)]
+enum FolderManagerDrag {
+    Folder(Uuid),
+    Entry(Uuid),
+}
+
+fn parse_folder_manager_drag(payload: &str) -> Option<FolderManagerDrag> {
+    let (kind, id) = payload.split_once(':')?;
+    let id = Uuid::parse_str(id).ok()?;
+    match kind {
+        "folder" => Some(FolderManagerDrag::Folder(id)),
+        "entry" => Some(FolderManagerDrag::Entry(id)),
+        _ => None,
+    }
 }
 
 #[derive(Clone)]
@@ -576,6 +593,7 @@ fn VaultScreen(
     let mut editing = use_signal::<Option<VaultEntry>>(|| None);
     let mut show_editor = use_signal(|| false);
     let mut show_folder_modal = use_signal(|| false);
+    let mut show_folder_manager = use_signal(|| false);
     let mut show_folder_rename_modal = use_signal(|| false);
     let mut show_settings = use_signal(|| false);
     let mut show_generator = use_signal(|| false);
@@ -590,6 +608,8 @@ fn VaultScreen(
     let mut rename_folder_id = use_signal::<Option<Uuid>>(|| None);
     let mut rename_folder_name = use_signal(String::new);
     let mut folder_context_menu = use_signal::<Option<Uuid>>(|| None);
+    let mut folder_entry_context_menu = use_signal::<Option<Uuid>>(|| None);
+    let mut folder_manager_drag = use_signal::<Option<FolderManagerDrag>>(|| None);
     let mut save_error = use_signal::<Option<String>>(|| None);
     let mut notification = use_signal::<Vec<ToastState>>(Vec::new);
     let mut settings = use_signal(|| storage::load_settings().unwrap_or_default());
@@ -1037,6 +1057,7 @@ fn VaultScreen(
                     new_folder_parent_id.set(String::new());
                     show_folder_modal.set(true);
                 }
+                "folder-manager" => show_folder_manager.set(true),
                 "settings" => show_settings.set(true),
                 "switch-vault" => show_vault_switcher.set(true),
                 "rename-vault" => show_vault_rename.set(true),
@@ -1085,9 +1106,9 @@ fn VaultScreen(
             });
     }
 
-    let entries: Vec<VaultEntry> = vault()
-        .map(|v| v.entries)
-        .unwrap_or_default()
+    let all_entries: Vec<VaultEntry> = vault().map(|v| v.entries).unwrap_or_default();
+    let entries: Vec<VaultEntry> = all_entries
+        .clone()
         .into_iter()
         .filter(|e| {
             let q = search().to_lowercase();
@@ -1127,6 +1148,7 @@ fn VaultScreen(
     let expanded_snapshot = expanded_folders();
     let folders_for_select = folders.clone();
     let folder_tree = flatten_folder_tree(&folders);
+    let folder_tree_for_manager = folder_tree.clone();
     let folder_tree_for_select = folder_tree.clone();
     let notification_snapshot = notification();
     let current_settings = settings();
@@ -1179,6 +1201,13 @@ fn VaultScreen(
                             show_folder_modal.set(true);
                         },
                         if settings().primary_action_display == PrimaryActionDisplay::Icons { "📁+" } else { "+ New Folder" }
+                    }
+                    button {
+                        class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
+                        title: "Folder manager",
+                        aria_label: "Folder manager",
+                        onclick: move |_| show_folder_manager.set(true),
+                        if settings().primary_action_display == PrimaryActionDisplay::Icons { "🗂" } else { "Folder Manager" }
                     }
                     button {
                         class: if settings().primary_action_display == PrimaryActionDisplay::Icons { "secondary-btn icon-button primary-action" } else { "secondary-btn primary-action" },
@@ -1296,7 +1325,9 @@ fn VaultScreen(
             }
 
             div { class: "vault-layout",
-                aside { class: "folder-panel",
+                aside {
+                    class: "folder-panel",
+                    onclick: move |_| folder_context_menu.set(None),
                     div { class: "folder-panel-actions",
                         button {
                             class: "folder-tree-action",
@@ -1321,7 +1352,8 @@ fn VaultScreen(
                                 style: "margin-left: {depth}rem",
                                 oncontextmenu: {
                                     let id = folder.id;
-                                    move |_| {
+                                    move |event| {
+                                        event.prevent_default();
                                         selected_folder.set(Some(id));
                                         folder_context_menu.set(Some(id));
                                     }
@@ -1391,13 +1423,6 @@ fn VaultScreen(
                                                 }
                                             },
                                             "Delete"
-                                        }
-                                        button {
-                                            class: "context-menu-item",
-                                            onclick: move |_| {
-                                                folder_context_menu.set(None);
-                                            },
-                                            "Close"
                                         }
                                     }
                                 }
@@ -1516,6 +1541,10 @@ fn VaultScreen(
                         on_cancel: move |_| show_editor.set(false),
                         on_save: move |(mut updated, new_folder_name, new_folder_parent): (VaultEntry, Option<String>, Option<Uuid>)| {
                             if let Some(mut v) = vault() {
+                                if let Err(error) = validate_entry_password(&updated.password, &updated, &v) {
+                                    save_error.set(Some(error));
+                                    return;
+                                }
                                 if let Some(name) = new_folder_name {
                                     match v.create_folder(&name, new_folder_parent) {
                                         Ok(folder) => updated.folder_id = Some(folder.id),
@@ -1540,6 +1569,285 @@ fn VaultScreen(
                                 }
                             }
                         },
+                    }
+                }
+            }
+
+            if show_folder_manager() {
+                div { class: "modal-backdrop",
+                    div { class: "modal folder-manager-modal",
+                        div { class: "folder-manager-header",
+                            div {
+                                span { class: "eyebrow", "ORGANIZE VAULT" }
+                                h2 { "Folder manager" }
+                                p { class: "settings-help", "Add, rename, move, or delete folders and move entries between them." }
+                            }
+                            button {
+                                class: "primary",
+                                onclick: move |_| {
+                                    show_folder_manager.set(false);
+                                    new_folder_name.set(String::new());
+                                    new_folder_parent_id.set(String::new());
+                                    show_folder_modal.set(true);
+                                },
+                                "+ New folder"
+                            }
+                        }
+                        div {
+                            class: "folder-manager-tree",
+                            onclick: move |_| folder_entry_context_menu.set(None),
+                            if folder_tree_for_manager.is_empty() {
+                                p { class: "settings-help folder-manager-empty", "No folders yet. Create one to start organizing entries." }
+                            }
+                            for (folder, depth) in folder_tree_for_manager {
+                                div { class: "folder-manager-node",
+                                    div {
+                                        class: "folder-manager-row",
+                                        style: "padding-left: {depth}rem",
+                                        draggable: "true",
+                                        ondragstart: {
+                                            let folder_id = folder.id;
+                                            move |event| {
+                                                let transfer = event.data().data_transfer();
+                                                let _ = transfer.set_data("text/plain", &format!("folder:{folder_id}"));
+                                                transfer.set_effect_allowed("move");
+                                                folder_manager_drag.set(Some(FolderManagerDrag::Folder(folder_id)));
+                                            }
+                                        },
+                                        ondragend: move |_| folder_manager_drag.set(None),
+                                        ondragover: move |event| event.prevent_default(),
+                                        ondrop: {
+                                            let target_folder_id = folder.id;
+                                            move |event| {
+                                                event.prevent_default();
+                                                let payload = event.data().data_transfer().get_data("text/plain");
+                                                match payload.as_deref().and_then(parse_folder_manager_drag).or_else(|| folder_manager_drag()) {
+                                                    Some(FolderManagerDrag::Folder(folder_id)) => {
+                                                        move_folder(folder_id, Some(target_folder_id));
+                                                    }
+                                                    Some(FolderManagerDrag::Entry(entry_id)) => {
+                                                        move_entry((entry_id, Some(target_folder_id), None));
+                                                    }
+                                                    None => {}
+                                                }
+                                                folder_manager_drag.set(None);
+                                            }
+                                        },
+                                        onmouseup: {
+                                            let target_folder_id = folder.id;
+                                            move |_| {
+                                                if let Some(drag) = folder_manager_drag() {
+                                                    match drag {
+                                                        FolderManagerDrag::Folder(folder_id)
+                                                            if folder_id != target_folder_id => {
+                                                                move_folder(folder_id, Some(target_folder_id));
+                                                            }
+                                                        FolderManagerDrag::Entry(entry_id) => {
+                                                            move_entry((entry_id, Some(target_folder_id), None));
+                                                        }
+                                                        _ => {}
+                                                    }
+                                                    folder_manager_drag.set(None);
+                                                }
+                                            }
+                                        },
+                                        span {
+                                            class: "folder-manager-name",
+                                            onmousedown: {
+                                                let folder_id = folder.id;
+                                                move |_| folder_manager_drag.set(Some(FolderManagerDrag::Folder(folder_id)))
+                                            },
+                                            "📁 {folder.name}"
+                                        }
+                                        div { class: "folder-manager-actions",
+                                            button {
+                                                class: "icon-button",
+                                                title: "Rename folder",
+                                                aria_label: "Rename folder",
+                                                onclick: {
+                                                    let folder_id = folder.id;
+                                                    let folder_name = folder.name.clone();
+                                                    move |_| {
+                                                        show_folder_manager.set(false);
+                                                        rename_folder_id.set(Some(folder_id));
+                                                        rename_folder_name.set(folder_name.clone());
+                                                        show_folder_rename_modal.set(true);
+                                                    }
+                                                },
+                                                "✎"
+                                            }
+                                            button {
+                                                class: "icon-button",
+                                                title: "Move folder",
+                                                aria_label: "Move folder",
+                                                onclick: {
+                                                    let folder = folder.clone();
+                                                    move |_| {
+                                                        show_folder_manager.set(false);
+                                                        pending_folder_move.set(Some(folder.clone()));
+                                                    }
+                                                },
+                                                "⇄"
+                                            }
+                                            button {
+                                                class: "danger icon-button",
+                                                title: "Delete folder",
+                                                aria_label: "Delete folder",
+                                                onclick: {
+                                                    let folder = folder.clone();
+                                                    move |_| {
+                                                        show_folder_manager.set(false);
+                                                        pending_folder_delete.set(Some(folder.clone()));
+                                                    }
+                                                },
+                                                "⌫"
+                                            }
+                                        }
+                                    }
+                                    for entry in all_entries.iter().filter(|entry| entry.folder_id == Some(folder.id)) {
+                                        div {
+                                            class: "folder-manager-entry",
+                                            style: "padding-left: {depth + 1}rem",
+                                            draggable: "true",
+                                            ondragstart: {
+                                                let entry_id = entry.id;
+                                                move |event| {
+                                                    let transfer = event.data().data_transfer();
+                                                    let _ = transfer.set_data("text/plain", &format!("entry:{entry_id}"));
+                                                    transfer.set_effect_allowed("move");
+                                                    folder_manager_drag.set(Some(FolderManagerDrag::Entry(entry_id)));
+                                                }
+                                            },
+                                            ondragend: move |_| folder_manager_drag.set(None),
+                                            onmouseup: {
+                                                let target_folder_id = folder.id;
+                                                let source_folder_id = entry.folder_id;
+                                                move |_| {
+                                                    if let Some(FolderManagerDrag::Entry(entry_id)) = folder_manager_drag() {
+                                                        if source_folder_id != Some(target_folder_id) {
+                                                            move_entry((entry_id, Some(target_folder_id), None));
+                                                        }
+                                                        folder_manager_drag.set(None);
+                                                    }
+                                                }
+                                            },
+                                            oncontextmenu: {
+                                                let entry_id = entry.id;
+                                                move |event| {
+                                                    event.prevent_default();
+                                                    folder_entry_context_menu.set(Some(entry_id));
+                                                }
+                                            },
+                                            span {
+                                                onmousedown: {
+                                                    let entry_id = entry.id;
+                                                    move |_| folder_manager_drag.set(Some(FolderManagerDrag::Entry(entry_id)))
+                                                },
+                                                "🔑 {entry.title}"
+                                            }
+                                            if folder_entry_context_menu() == Some(entry.id) {
+                                                div { class: "folder-manager-context-menu",
+                                                    button {
+                                                        class: "context-menu-item",
+                                                        onclick: {
+                                                            let entry = entry.clone();
+                                                            move |_| {
+                                                                folder_entry_context_menu.set(None);
+                                                                show_folder_manager.set(false);
+                                                                pending_move.set(Some(entry.clone()));
+                                                            }
+                                                        },
+                                                        "Move entry"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if all_entries.iter().any(|entry| entry.folder_id.is_none()) {
+                                div {
+                                    class: "folder-manager-unfiled",
+                                    ondragover: move |event| event.prevent_default(),
+                                    ondrop: move |event| {
+                                        event.prevent_default();
+                                        let payload = event.data().data_transfer().get_data("text/plain");
+                                        if let Some(FolderManagerDrag::Entry(entry_id)) = payload
+                                            .as_deref()
+                                            .and_then(parse_folder_manager_drag)
+                                            .or_else(|| folder_manager_drag())
+                                        {
+                                            move_entry((entry_id, None, None));
+                                        }
+                                        folder_manager_drag.set(None);
+                                    },
+                                    h3 { "Unfiled entries" }
+                                    for entry in all_entries.iter().filter(|entry| entry.folder_id.is_none()) {
+                                        div {
+                                            class: "folder-manager-entry",
+                                            draggable: "true",
+                                            ondragstart: {
+                                                let entry_id = entry.id;
+                                                move |event| {
+                                                    let transfer = event.data().data_transfer();
+                                                    let _ = transfer.set_data("text/plain", &format!("entry:{entry_id}"));
+                                                    transfer.set_effect_allowed("move");
+                                                    folder_manager_drag.set(Some(FolderManagerDrag::Entry(entry_id)));
+                                                }
+                                            },
+                                            ondragend: move |_| folder_manager_drag.set(None),
+                                            onmouseup: {
+                                                let source_entry_id = entry.id;
+                                                move |_| {
+                                                if let Some(FolderManagerDrag::Entry(dragged_entry_id)) = folder_manager_drag() {
+                                                    if dragged_entry_id == source_entry_id {
+                                                        folder_manager_drag.set(None);
+                                                    }
+                                                }
+                                                }
+                                            },
+                                            oncontextmenu: {
+                                                let entry_id = entry.id;
+                                                move |event| {
+                                                    event.prevent_default();
+                                                    folder_entry_context_menu.set(Some(entry_id));
+                                                }
+                                            },
+                                            span {
+                                                onmousedown: {
+                                                    let entry_id = entry.id;
+                                                    move |_| folder_manager_drag.set(Some(FolderManagerDrag::Entry(entry_id)))
+                                                },
+                                                "🔑 {entry.title}"
+                                            }
+                                            if folder_entry_context_menu() == Some(entry.id) {
+                                                div { class: "folder-manager-context-menu",
+                                                    button {
+                                                        class: "context-menu-item",
+                                                        onclick: {
+                                                            let entry = entry.clone();
+                                                            move |_| {
+                                                                folder_entry_context_menu.set(None);
+                                                                show_folder_manager.set(false);
+                                                                pending_move.set(Some(entry.clone()));
+                                                            }
+                                                        },
+                                                        "Move entry"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        div { class: "modal-actions",
+                            button {
+                                class: "secondary-btn",
+                                onclick: move |_| show_folder_manager.set(false),
+                                "Close"
+                            }
+                        }
                     }
                 }
             }
@@ -2852,6 +3160,21 @@ mod tests {
         assert_eq!(merged.folders[1].parent_id, Some(merged.folders[0].id));
         assert_eq!(merged.entries[0].folder_id, Some(merged.folders[1].id));
         assert_ne!(merged.entries[0].id, entry_id);
+    }
+
+    #[test]
+    fn folder_manager_drag_payload_identifies_entries_and_folders() {
+        let id = Uuid::new_v4();
+
+        assert!(matches!(
+            parse_folder_manager_drag(&format!("folder:{id}")),
+            Some(FolderManagerDrag::Folder(parsed)) if parsed == id
+        ));
+        assert!(matches!(
+            parse_folder_manager_drag(&format!("entry:{id}")),
+            Some(FolderManagerDrag::Entry(parsed)) if parsed == id
+        ));
+        assert!(parse_folder_manager_drag("unknown:not-an-id").is_none());
     }
 }
 

@@ -5,6 +5,7 @@ mod clipboard;
 mod crypto;
 mod model;
 mod password_gen;
+mod password_strength;
 mod platform;
 mod storage;
 
@@ -19,6 +20,7 @@ fn native_menu() -> dioxus::desktop::muda::Menu {
     file.append_items(&[
         &MenuItem::with_id("add-entry", "Add Entry", true, None),
         &MenuItem::with_id("new-folder", "New Folder", true, None),
+        &MenuItem::with_id("folder-manager", "Folder Manager", true, None),
         &MenuItem::with_id("backup", "Backup", true, None),
         &MenuItem::with_id("restore-file", "Restore", true, None),
         &MenuItem::with_id("sync-now", "Sync Now", true, None),

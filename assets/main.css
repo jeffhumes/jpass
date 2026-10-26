@@ -306,6 +306,28 @@ button.lock-btn {
   gap: 0.15rem;
 }
 
+.folder-context-menu {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  min-width: 130px;
+  padding: 0.25rem;
+  position: absolute;
+  right: 0.35rem;
+  top: 2rem;
+  z-index: 4;
+}
+
+.folder-context-menu .context-menu-item {
+  border: 0;
+  min-height: 34px;
+  padding: 0.45rem 0.6rem;
+  text-align: left;
+}
+
 .folder-tree-row.nested::before {
   content: "";
   position: absolute;
@@ -1029,6 +1051,128 @@ label {
 .restore-selection-item input {
   min-height: auto;
   width: auto;
+}
+
+.folder-manager-modal {
+  width: min(760px, calc(100% - 2rem));
+}
+
+.folder-manager-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.folder-manager-header h2 {
+  margin-bottom: 0.25rem;
+}
+
+.folder-manager-tree {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-top: 0.75rem;
+  max-height: min(55vh, 32rem);
+  overflow: auto;
+  padding: 0.5rem;
+}
+
+.folder-manager-row,
+.folder-manager-entry {
+  align-items: center;
+  display: flex;
+  gap: 0.6rem;
+  min-height: 38px;
+}
+
+.folder-manager-row[draggable="true"],
+.folder-manager-entry[draggable="true"] {
+  cursor: grab;
+}
+
+.folder-manager-row[draggable="true"]:active,
+.folder-manager-entry[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.folder-manager-row {
+  border-radius: 6px;
+  justify-content: space-between;
+}
+
+.folder-manager-row:hover,
+.folder-manager-entry:hover {
+  background: var(--surface-subtle);
+}
+
+.folder-manager-name,
+.folder-manager-entry span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-manager-name {
+  font-weight: 600;
+}
+
+.folder-manager-entry {
+  color: var(--muted);
+  position: relative;
+  justify-content: space-between;
+  padding-right: 0.35rem;
+}
+
+.folder-manager-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.25rem;
+}
+
+.folder-manager-actions .icon-button {
+  min-height: 32px;
+  width: 32px;
+}
+
+.folder-manager-context-menu {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  min-width: 150px;
+  padding: 0.25rem;
+  position: absolute;
+  right: 0.35rem;
+  top: 2rem;
+  z-index: 3;
+}
+
+.folder-manager-context-menu .context-menu-item {
+  border: 0;
+  min-height: 34px;
+  padding: 0.45rem 0.6rem;
+  text-align: left;
+}
+
+.folder-manager-unfiled {
+  border-top: 1px solid var(--border);
+  margin-top: 0.5rem;
+  padding-top: 0.4rem;
+}
+
+.folder-manager-unfiled h3 {
+  color: var(--muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  margin: 0.4rem 0;
+  text-transform: uppercase;
+}
+
+.folder-manager-empty {
+  margin: 0.5rem;
 }
 
 .modal-actions {

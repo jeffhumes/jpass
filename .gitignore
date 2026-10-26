@@ -2,3 +2,6 @@
 */target
 /dist
 *.sqlite3
+
+/bitwarden-2026.10.1-recovered
+/deb
